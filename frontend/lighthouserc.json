@@ -1,0 +1,25 @@
+{
+  "ci": {
+    "collect": {
+      "staticDistDir": "./dist",
+      "url": ["http://localhost/index.html"],
+      "numberOfRuns": 1,
+      "settings": {
+        "onlyCategories": ["pwa"]
+      }
+    },
+    "assert": {
+      "assertions": {
+        "installable-manifest": ["error", { "minScore": 1 }],
+        "viewport": ["error", { "minScore": 1 }],
+        "maskable-icon": ["warn", { "minScore": 1 }],
+        "themed-omnibox": ["warn", { "minScore": 1 }],
+        "splash-screen": ["warn", { "minScore": 1 }],
+        "content-width": ["warn", { "minScore": 1 }]
+      }
+    },
+    "upload": {
+      "target": "temporary-public-storage"
+    }
+  }
+}
