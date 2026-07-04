@@ -53,3 +53,36 @@ Do not delete or rewrite prior entries.
   backend suite: 123/123 passing. Full frontend suite: 21 files/83
   tests passing.
 - Next up: Tier 3 (backend API surface — depends on all of Tier 1).
+
+## 2026-07-04 (cont'd) — Tier 3
+
+- Tier 3 Wave 1 (Tasks 3A/3B/3C — core loop, Zotero, CSV export
+  endpoints): DONE, merged. Task 3A took 5 verification rounds (largest
+  task): cross-session isolation gaps across search/queue/saved/
+  decisions, a non-round-trip cache test, and Paper.retracted computed
+  but never exposed in any API response were all found and fixed.
+  Task 3B: fixed a narrow session-fixation-adjacent atomicity bug
+  (connection insert and session rotation were two separate commits).
+  Task 3C: fixed a formula-injection bypass via leading whitespace/
+  invisible Unicode characters. Also resolved the open SPEC §10.4 gap
+  by adding DELETE /zotero/connection.
+- Tier 3 Wave 2 (Task 3D, cross-cutting middleware): DONE, merged.
+  Adversarial review found a real BLOCKING issue — the inbound rate
+  limiter was trivially bypassable (keyed on session_id, but a fresh
+  cookie-less request gets a fresh session, so the limit never
+  engaged). Fixed by making client IP the primary key. Both tester and
+  adversarial independently re-attempted the original attack against
+  the fix before confirming it closed, and adversarial ruled out an
+  X-Forwarded-For spoofing bypass too.
+- Tier 3 is now FULLY CLOSED. Every task this tier was independently
+  verified by tester and adversarial-generalist; every real finding
+  was fixed and re-verified by reproducing the underlying defect first
+  (revert, confirm failure, restore, confirm fix) rather than trusting
+  a fix's own claim.
+- All of Tier 0-3 committed to main. Full backend suite: 212/212
+  passing. Full frontend suite (unchanged since Tier 2): 21 files/83
+  tests passing.
+- Next up: Tier 4 (frontend↔backend integration — depends on Tier 2 +
+  Tier 3, both now done). Reminder: BuildPlan.md's Task 4A section
+  carries the design/ kit reconciliation notes from earlier — keep
+  LLPaperCard's drag-gesture math as reference, discard the rest.
