@@ -23,8 +23,8 @@ entries at the bottom. Do not delete or rewrite prior entries.
 | `SESSION_COOKIE_SECRET` | Task 1A (session cookie signing, §10.2) | NOT NEEDED YET | Same as above — dev-generated placeholder, not requested. |
 | `NCBI_API_KEY` | Task 1B (PubMed client, §7) | NOT NEEDED YET | 1B's tests hit `respx`-mocked fixtures per BuildPlan, no live NCBI calls. Only needed later for a real end-to-end PubMed search (Tier 6 or manual QA) — raises the E-utilities rate limit from 3/sec to 10/sec but isn't required to function. |
 | `NCBI_EMAIL` | Task 1B | NOT NEEDED YET | Same as above; NCBI just asks for a contact email on real requests. |
-| `ZOTERO_CLIENT_KEY` | Task 1C (Zotero OAuth handshake, §8.2) | REQUESTED | 1C's automated tests use a fixed mocked callback/fixture responses (BuildPlan Task 1C), so this isn't a blocker for Tier 1's merge. It IS needed for Task 6C (real sandbox OAuth smoke test) and for any live manual check before then. Requires registering an app at https://www.zotero.org/oauth/apps to get a client key/secret pair. |
-| `ZOTERO_CLIENT_SECRET` | Task 1C | REQUESTED | Paired with `ZOTERO_CLIENT_KEY` above. |
+| `ZOTERO_CLIENT_KEY` | Task 1C (Zotero OAuth handshake, §8.2) | RECEIVED | Placed in `backend/.env` (git-ignored, confirmed not tracked/staged). App registered at https://www.zotero.org/oauth/apps with callback URL `http://localhost:8000/api/v1/zotero/auth/callback` (matches `zotero_callback_url` in `backend/app/config.py`) and homepage URL left as a placeholder (`http://localhost:5173`) since no public/deployed URL exists yet — homepage isn't consumed by any code path, purely informational on Zotero's consent screen. Confirmed `app.config.settings` loads it correctly. |
+| `ZOTERO_CLIENT_SECRET` | Task 1C | RECEIVED | Paired with `ZOTERO_CLIENT_KEY` above, same placement/verification. |
 | `TURSO_DATABASE_URL` / `TURSO_AUTH_TOKEN` | Task 5A (infra provisioning) | NOT NEEDED YET | Tier 5, not Tier 1. Will request when we get there — local SQLite is used until then. |
 
 ## Log
@@ -39,3 +39,14 @@ in hand before 1C's implementation is somebody's first look at whether
 the handshake actually works. Human to supply values directly into
 `backend/.env` (git-ignored) when convenient — do not paste them into
 chat or into this file.
+
+[2026-07-04] ZOTERO_CLIENT_KEY/ZOTERO_CLIENT_SECRET RECEIVED. Created
+`backend/.env` from `.env.example` (didn't exist yet) and placed both
+values there, plus generated `TOKEN_ENCRYPTION_KEY`/
+`SESSION_COOKIE_SECRET` (dev placeholders, per their own documented
+generation commands) so the backend now runs with real, persistent
+secrets instead of the ephemeral fallback. Verified `.env` is git-
+ignored (`git check-ignore` confirms; `git status` shows it untracked)
+and that `app.config.settings` loads all four values correctly. A real
+OAuth handshake against Zotero can now be manually sanity-checked if
+desired; Task 6C's real sandbox smoke test is still the formal gate.
