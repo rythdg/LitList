@@ -149,11 +149,30 @@ class SessionIdentityMiddleware:
     avoiding that footgun now is cheaper than migrating away from it later.
     """
 
+    # Paths deliberately exempt from session resolution — Task 0.1's
+    # `/health` and `/api/v1/health` liveness/readiness probes are
+    # documented (see `app/main.py`) as having "no DB dependency so it
+    # never fails purely because the database is briefly unreachable."
+    # Discovered as a regression while wiring this middleware into the
+    # shared `app` for the first time (BuildPlan.md Task 3D): without this
+    # exemption, every request — including the health check — triggers a
+    # `Session` row lookup/insert, silently reintroducing exactly the DB
+    # dependency that endpoint was written to avoid (and breaking
+    # `tests/test_health.py`, which never provisions a schema). Kept as a
+    # fixed, hardcoded set rather than a settings-driven exemption list
+    # since it's a narrow, load-bearing exception to "every request gets a
+    # session," not a general-purpose bypass mechanism.
+    _EXEMPT_PATHS = frozenset({"/health", f"{settings.api_v1_prefix}/health"})
+
     def __init__(self, app):  # type: ignore[no-untyped-def]
         self.app = app
 
     async def __call__(self, scope, receive, send):  # type: ignore[no-untyped-def]
         if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+
+        if scope["path"] in self._EXEMPT_PATHS:
             await self.app(scope, receive, send)
             return
 

@@ -62,5 +62,16 @@ class Settings(BaseSettings):
     ncbi_tool: str = "litlist"
     ncbi_email: str | None = None
 
+    # --- CORS allow-list (Task 3D, SPEC.md §10.7) ---
+    # Comma-separated list of the frontend's real origin(s) — this is
+    # LitList's main CSRF defense (§10.7), so it must be an explicit
+    # allow-list, never a wildcard, and must be extended (not replaced)
+    # with the real deployed frontend origin by Task 5A rather than left
+    # at this local-dev default in any real deployment. Read by
+    # `app/middleware/security.py`, which owns both the CORS middleware
+    # wiring and the additional server-side Origin/Content-Type CSRF
+    # guard described there.
+    frontend_origins: str = "http://localhost:5173"
+
 
 settings = Settings()

@@ -45,6 +45,7 @@ is purely a smarter trigger-detection check, not a content transform.
 from __future__ import annotations
 
 import csv
+import logging
 import unicodedata
 from collections.abc import Iterator
 
@@ -57,6 +58,8 @@ from app.db import get_session
 from app.middleware.session import get_current_session
 from app.models.entities import DecisionState, Paper, QueueDecision
 from app.models.entities import Session as SessionRow
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -159,17 +162,40 @@ def _iter_saved_papers_csv(db: DBSession, session_id: str) -> Iterator[str]:
     writer = csv.writer(_EchoBuffer())
     yield writer.writerow(_CSV_COLUMNS)
 
-    rows = db.exec(
-        select(Paper, QueueDecision)
-        .join(QueueDecision, QueueDecision.pmid == Paper.pmid)  # type: ignore[arg-type]
-        .where(
-            QueueDecision.session_id == session_id,
-            QueueDecision.decision == DecisionState.interested,
+    # Task 3D note (adversarial review, "TASK 3D REVIEW"): once this
+    # generator has yielded at least the header row, the response's 200
+    # status and some body bytes are already flushed to the client — a
+    # failure partway through can no longer be turned into a clean 4xx/5xx
+    # (§10.3's error-shape guarantee doesn't apply here; there is no
+    # response left to reshape). The best available mitigation at this
+    # layer is to make the failure loud server-side (so it's caught by
+    # monitoring rather than silently read as "an unusually short but
+    # otherwise normal export") rather than letting it vanish as a
+    # truncated connection with no log trace — the client still just sees
+    # a truncated file, which is a known, accepted limitation of
+    # streaming a response whose success/failure isn't knowable until
+    # it's already in flight.
+    try:
+        rows = db.exec(
+            select(Paper, QueueDecision)
+            .join(QueueDecision, QueueDecision.pmid == Paper.pmid)  # type: ignore[arg-type]
+            .where(
+                QueueDecision.session_id == session_id,
+                QueueDecision.decision == DecisionState.interested,
+            )
+            .order_by(QueueDecision.position)  # type: ignore[arg-type]
         )
-        .order_by(QueueDecision.position)  # type: ignore[arg-type]
-    )
-    for paper, _decision in rows:
-        yield writer.writerow(_paper_row(paper))
+        for paper, _decision in rows:
+            yield writer.writerow(_paper_row(paper))
+    except Exception:
+        logger.exception(
+            "GET /export.csv: streaming failed partway through for session_id=%s "
+            "— client received a truncated file with no error signal in the "
+            "response body (streaming responses can't be retroactively turned "
+            "into an error status once bytes are already in flight)",
+            session_id,
+        )
+        raise
 
 
 @router.get("/export.csv")

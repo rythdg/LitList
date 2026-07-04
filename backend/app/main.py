@@ -10,6 +10,10 @@ from __future__ import annotations
 from fastapi import FastAPI
 
 from app.config import settings
+from app.middleware.errors import install_exception_handlers
+from app.middleware.ratelimit import install_rate_limiting
+from app.middleware.security import install_security
+from app.middleware.session import SessionIdentityMiddleware
 from app.routes.decisions import router as decisions_router
 from app.routes.export import router as export_router
 from app.routes.queue import router as queue_router
@@ -32,18 +36,43 @@ app.include_router(queue_router, prefix=settings.api_v1_prefix)
 app.include_router(decisions_router, prefix=settings.api_v1_prefix)
 app.include_router(saved_router, prefix=settings.api_v1_prefix)
 
-# NOTE (Task 3A): `SessionIdentityMiddleware` is deliberately NOT added to
-# this `app` instance here — per Task 1A's log, wiring the full middleware
-# stack (session identity, CORS, inbound rate limiting, security headers)
-# into the real app is Task 3D's job (BuildPlan.md's cross-cutting
-# middleware task), once all of Wave 1's routes exist to test it against.
-# Every Wave-1 route module (3A/3B/3C) already depends on
-# `get_current_session`, which requires the middleware to be installed —
-# each task's own tests build a local `FastAPI()` instance with
-# `SessionIdentityMiddleware` added directly (see `test_zotero_routes.py`
-# and this task's `tests/test_search_routes.py` etc. for the pattern)
-# rather than testing against this shared `app` object, which will only
-# be fully session-aware once Task 3D lands.
+# Task 3D: cross-cutting middleware stack (SPEC.md §10.3/§10.5/§10.7).
+# Exception handlers aren't part of the ASGI middleware *stack* (they're
+# registered on `ExceptionMiddleware`, a fixed inner layer Starlette
+# always builds around the router — see `app/middleware/errors.py`'s
+# docstring) so their registration order relative to `add_middleware`
+# calls below doesn't matter. The `add_middleware` calls below, however,
+# are order-sensitive: Starlette wraps each newly-added middleware
+# *around* every previously-added one, so the FIRST middleware added ends
+# up innermost (closest to routing) and the LAST one added ends up
+# outermost (the first thing every request hits, the last thing every
+# response passes through). Desired outer-to-inner order for a request:
+#
+#   SecurityHeaders -> CORS -> CSRFGuard -> SessionIdentity -> RateLimit -> routes
+#
+# - `SecurityHeaders` outermost so §10.7's baseline headers land on
+#   literally every response this app ever sends, including a CORS
+#   preflight response, a CSRF-guard 403, a rate-limit 429, or the global
+#   exception handler's 500.
+# - `CORS` next so a real browser's preflight `OPTIONS` is answered
+#   before anything else runs.
+# - `CSRFGuard` before `SessionIdentity`/`RateLimit` so a
+#   disallowed-origin or non-JSON state-changing request is rejected
+#   before a session row is even looked up/created and before the
+#   inbound rate limiter does any work for it (§10.7: "a request from a
+#   non-allow-listed origin never reaches the route handler at all").
+# - `SessionIdentity` before `RateLimit` because §10.5's inbound
+#   throttling is keyed primarily by `session_id` (§9.1's only identity
+#   in this system) — the rate limiter needs `request.state.session`
+#   already resolved.
+#
+# That means the `add_middleware` calls themselves must run in the
+# *reverse* of the list above (innermost/first-added to
+# outermost/last-added):
+install_rate_limiting(app, settings.api_v1_prefix)  # innermost — first added
+app.add_middleware(SessionIdentityMiddleware)
+install_security(app)  # adds CSRFGuard, then CORS, then SecurityHeaders (outermost)
+install_exception_handlers(app)
 
 
 @app.get("/health")

@@ -201,6 +201,7 @@ introducing a new code should add it here in the same piece of work.
 | `zotero_not_connected` | 401 | No `ZoteroConnection` exists yet for this session — the frontend uses this to trigger the "Connect to Zotero" step (§5.5), per §10.4's note on `/zotero/collections`. | 3B |
 | `zotero_session_mismatch` | 403 | OAuth callback's request token doesn't match the session that started the handshake (§10.2's binding primitive, §9.6). | 3B |
 | `internal_error` | 500 | Unhandled server error; the exception-shape guarantee (never leak internals) applies here most of all. | 3D (catch-all handler) |
+| `csrf_rejected` | 403 | A state-changing request (`POST`/`PUT`/`PATCH`/`DELETE`) either carried a disallowed `Origin` header or (for `POST`/`PUT`/`PATCH`) a non-`application/json` `Content-Type` (§10.7's CORS/CSRF guard). Rejected before the request body is parsed or any route handler/dependency runs. | 3D (`CSRFGuardMiddleware`) |
 
 ### Example
 
@@ -333,3 +334,10 @@ assurance.
   already built in the frontend against fixture data with no real
   backend field to consume). Implemented in `backend/app/routes/
   search.py`, `queue.py`, `saved.py`.
+- **2026-07-04 — Task 3D:** added `csrf_rejected` (403) to §2's known
+  `code` table — the new `CSRFGuardMiddleware`'s rejection response for
+  a disallowed-origin or non-JSON-Content-Type state-changing request
+  (SPEC.md §10.7). Implemented in `backend/app/middleware/security.py`,
+  wired into `backend/app/main.py` alongside the rest of Task 3D's
+  cross-cutting middleware stack (inbound rate limiting, the global
+  exception-shape handler, baseline security headers).
