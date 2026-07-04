@@ -1,0 +1,3 @@
+# Merge-to-main deploy workflow (BuildPlan.md Task 5B, §12.4): frontend
+# build -> Pages; Render auto-deploys via its own git integration.
+# Deliberately empty at Tier 0 — filled in at Tier 5, Task 5B.

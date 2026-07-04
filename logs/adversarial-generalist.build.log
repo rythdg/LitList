@@ -1,0 +1,6 @@
+# adversarial-generalist — build log
+
+This file is the human's timesheet-equivalent for this agent role — read
+in place of a status meeting. Every entry follows the format described in
+this agent's system prompt (`.claude/agents/adversarial-generalist.md`).
+Newest entries at the bottom. Do not delete or rewrite prior entries.

@@ -1,0 +1,8 @@
+# status — human-facing rollup
+
+Posted by the orchestrator at the close of every wave: one line per task
+(done / blocked / gate-not-met) plus anything currently open. This is the
+"are we on track at a glance" summary layer — the five per-agent
+build.logs (plus orchestrator.log) remain the detailed record for when
+you want to go deeper on any one line here. Newest entries at the bottom.
+Do not delete or rewrite prior entries.

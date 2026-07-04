@@ -1,0 +1,4 @@
+# PR-gate CI (BuildPlan.md Task 5B, §12.4).
+# Deliberately empty at Tier 0 — filled in at Tier 5, Task 5B, once there
+# are real backend/frontend test suites to run. Created now so the file
+# path exists and later tasks don't have to also create the directory.

@@ -1,0 +1,32 @@
+# Stray local Python venv left over from early exploration — not part of
+# the monorepo layout (backend/ + frontend/); never commit it.
+/litlist/
+
+# --- Backend (Python) ---
+backend/.venv/
+backend/venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+*.egg-info/
+backend/litlist_dev.db
+*.db
+*.db-journal
+.env
+backend/.env
+
+# --- Frontend (Node/Vite) ---
+frontend/node_modules/
+frontend/dist/
+frontend/dist-ssr/
+frontend/coverage/
+*.local
+node_modules/
+
+# --- Editor / OS ---
+.DS_Store
+.vscode/*
+!.vscode/extensions.json
+.idea/

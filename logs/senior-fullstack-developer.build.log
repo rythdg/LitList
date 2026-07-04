@@ -1,0 +1,76 @@
+# senior-fullstack-developer — build log
+
+This file is the human's timesheet-equivalent for this agent role — read
+in place of a status meeting. Every entry follows the format described in
+this agent's system prompt (`.claude/agents/senior-fullstack-developer.md`).
+Newest entries at the bottom. Do not delete or rewrite prior entries.
+
+[2026-07-04T00:00:00] TASK 0.1 — START
+BuildPlan.md Tier 0, Task 0.1 (§10.1 backend framework choices, §11.1
+frontend framework choices, §9.2 for what db.py must eventually support).
+No dependency logs to read — this is the first work on the project (repo
+was not yet a git repo; initialized it now, default branch renamed to
+`main`). Seam: none yet in the cross-stack sense, but this task lays the
+`backend/app/db.py` module that Task 5A (infra) and Task 1A (data model)
+will both build on — keeping it env-var-driven per BuildPlan's explicit
+instruction not to let 5A/1A invent two different connection paths.
+Plan: monorepo layout (backend/ FastAPI+SQLModel, frontend/ Vite+React+
+TS+Tailwind), ruff/mypy/pytest config, ESLint/tsc/Vitest config, empty
+.github/workflows/ files, smoke-test both apps boot, smoke-test db.py
+against local SQLite.
+
+[2026-07-04T00:20:00] TASK 0.1 — COMPLETE
+Did: created the monorepo layout (`backend/`, `frontend/`) inside the
+freshly-init'd git repo (default branch `main`). Backend: FastAPI app
+skeleton (`app/main.py`, `/health` + `/api/v1/health`), `app/config.py`
+(pydantic-settings, env-driven), `app/db.py` — the shared engine module
+per BuildPlan's explicit "5A/1A must not invent two paths" instruction —
+env-var-driven (`TURSO_DATABASE_URL`/`TURSO_AUTH_TOKEN` -> sqlite+libsql
+dialect via `sqlalchemy-libsql`, else local SQLite file), ruff+mypy
+(strict) config in `pyproject.toml`, pytest config + `backend/tests/`
+with `test_health.py` and `test_db.py`. Frontend: Vite+React+TS scaffold
+(via `npm create vite@latest . -- --template react-ts`), swapped the
+default `oxlint` for ESLint (flat config, typescript-eslint +
+react-hooks + react-refresh) since BuildPlan Task 0.1 specifically calls
+for "ESLint/tsc", added Tailwind v4 via `@tailwindcss/vite`, Vitest +
+React Testing Library config (`vite.config.ts`'s `test` block,
+`src/test/setup.ts`), stripped the vite template's demo markup/assets
+down to a placeholder `App.tsx` (real screens are Task 2B's job) with an
+`App.test.tsx` smoke test. Added empty `.github/workflows/ci.yml` and
+`deploy.yml` (Task 5B fills these in). Root `.gitignore` added, ignoring
+the stray `litlist/` venv (left alone per instructions, not deleted),
+Python/Node build artifacts, and `.env` files.
+Worked (actual results, not "should work"):
+  - Backend: `pytest -q` -> 4 passed (health x2, db-connects-to-local-
+    sqlite, turso-url-translation). `ruff check .` -> all checks passed.
+    `mypy app` (strict) -> no issues in 10 source files. Booted
+    `uvicorn app.main:app` on :8123 and curled both `/health` and
+    `/api/v1/health` -> `{"status":"ok"}` on both.
+  - Frontend: `npx eslint . --max-warnings 0` -> clean. `npx tsc -b
+    --noEmit` -> clean (had to switch the `vite.config.ts` import to add
+    a `/// <reference types="vitest/config" />` triple-slash directive
+    first — plain `defineConfig` from `vite` doesn't know about the
+    `test` key and tsc rejected it). `npx vitest run` -> 1 passed
+    (App renders "LitList"). `npm run build` -> succeeded, Tailwind CSS
+    present in the built `dist/assets/index-*.css`. Booted `vite --port
+    5183 --host 127.0.0.1`, curled `/` -> HTTP 200 with the app shell
+    HTML.
+Changed (new files): `backend/pyproject.toml`, `backend/.env.example`,
+`backend/app/{__init__,config,db,main}.py`, `backend/app/{models,
+middleware,routes,integrations,text,auth}/__init__.py` (empty package
+dirs for Tier 1/3 to fill), `backend/tests/{__init__,test_health,
+test_db}.py`, `frontend/` (full Vite scaffold — `package.json`,
+`vite.config.ts`, `eslint.config.js`, `tsconfig*.json`, `index.html`,
+`src/{main.tsx,App.tsx,App.test.tsx,index.css,test/setup.ts}`,
+`src/assets/`, `public/`), `.github/workflows/{ci,deploy}.yml`,
+`.gitignore`.
+Decision call (BuildPlan/SPEC silent on this): used Python 3.12 for the
+backend venv rather than the system's default 3.14 — 3.14 is too new for
+some of the pinned dependency ecosystem to have wheels/compat guarantees
+yet; 3.12 is a safe, boring, widely-supported choice for a project this
+early. Also chose ESLint's flat-config format (`eslint.config.js`) since
+that's the current ESLint default and ships cleanly with
+`typescript-eslint`'s current major version.
+Open: none for this task. Real route modules, models, and PWA
+config land in Tier 1/2/3 per BuildPlan; this task's scope was
+scaffolding only.

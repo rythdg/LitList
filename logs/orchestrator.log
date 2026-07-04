@@ -1,0 +1,11 @@
+# orchestrator — decision log
+
+Kept by the orchestrating session on the same append-only discipline as
+every agent's build.log. Records every merge decision (task ID, which
+`tester`/`adversarial-generalist` gate entries were verified before
+merging), every escalation raised or resolved, and every
+significant/minor-finding call made and why. This exists so a resumed or
+replacement orchestrator session — or the human, auditing after the
+fact — has continuity instead of reconstructing "why was this merged"
+from five other logs and git history. Newest entries at the bottom. Do
+not delete or rewrite prior entries.
