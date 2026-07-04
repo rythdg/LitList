@@ -23,5 +23,44 @@ class Settings(BaseSettings):
     # --- App metadata ---
     api_v1_prefix: str = "/api/v1"
 
+    # --- Session identity & secrets (Task 1A, SPEC.md §9.1/§9.6/§10.2) ---
+    # Both are dev-only placeholders that MUST be generated (never hand-
+    # authored or committed) — see backend/.env.example for how, and
+    # app/models/crypto.py / app/middleware/session.py for the documented
+    # fallback used when unset (local dev/test convenience only, never a
+    # substitute for setting these for real in any persistent deployment,
+    # per §12.3). Left optional here so a fresh checkout with no .env still
+    # boots and runs the test suite.
+    token_encryption_key: str | None = None
+    session_cookie_secret: str | None = None
+
+    # --- Zotero OAuth 1.0a (Task 1C, SPEC.md §8.2/§8.3) ---
+    # Client key/secret come from registering LitList at
+    # zotero.org/oauth/apps (see logs/creds.log — requested, not yet
+    # received; left optional so a fresh checkout still boots and the
+    # fully-mocked test suite runs with no live credential). Never logged,
+    # never returned in any API response.
+    zotero_client_key: str | None = None
+    zotero_client_secret: str | None = None
+    # Fixed, non-dynamic callback path (§8.2's open-redirect fix) — this is
+    # the exact URL registered with Zotero in the developer console and is
+    # never derived from request headers/query params at request time. The
+    # host portion must match wherever this backend is actually deployed
+    # (see BuildPlan.md Task 5A); the default here is a local-dev value.
+    zotero_callback_url: str = "http://localhost:8000/api/v1/zotero/auth/callback"
+    # Fixed in-app path the user lands on after the callback finishes
+    # (§8.2 step 6, §11.6) — again never attacker-influenceable.
+    zotero_post_auth_redirect_url: str = "http://localhost:5173/?zotero=connected"
+
+    # --- PubMed E-utilities (Task 1B, SPEC.md §7.7) ---
+    # Free NCBI API key — raises the outbound rate ceiling from 3 req/s to
+    # 10 req/s (§7.7). Optional so a fresh checkout still boots and the
+    # fully respx-mocked test suite runs with no live credential; see
+    # logs/creds.log for status. `tool`/`email` are required-in-practice
+    # identification NCBI asks every E-utilities client to send.
+    ncbi_api_key: str | None = None
+    ncbi_tool: str = "litlist"
+    ncbi_email: str | None = None
+
 
 settings = Settings()
