@@ -133,7 +133,7 @@ interface SegmentedAbstractResponse {
       "display_text": "Prior work has shown mixed results in Fig. 2, e.g. reduced uptake vs. controls.",
       "spoken_text": "Prior work has shown mixed results in figure two, for example reduced uptake versus controls.",
       "char_start": 12,
-      "char_end": 92,
+      "char_end": 91,
       "pause_class": "sentence"
     },
     {
@@ -153,7 +153,7 @@ interface SegmentedAbstractResponse {
       "display_text": "We enrolled 40 participants across two sites.",
       "spoken_text": "We enrolled forty participants across two sites.",
       "char_start": 103,
-      "char_end": 149,
+      "char_end": 148,
       "pause_class": "sentence"
     }
   ]

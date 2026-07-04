@@ -4,3 +4,107 @@ This file is the human's timesheet-equivalent for this agent role — read
 in place of a status meeting. Every entry follows the format described in
 this agent's system prompt (`.claude/agents/tester.md`). Newest entries at
 the bottom. Do not delete or rewrite prior entries.
+
+[2026-07-04T14:00:00] TIER 0 VERIFY — START
+Verifying Tier 0 exit gate (BuildPlan.md lines 314-368): Task 0.1
+(scaffolding boots, db.py connects local SQLite/Turso-via-env-var),
+Task 0.2 (CONTRACTS.md), Task 0.3 (fixture corpus). Checking backend
+pytest suite (test_health.py, test_db.py) against SPEC §15 relevance,
+booting backend/frontend, confirming CONTRACTS.md and fixtures/ exist
+and are well-formed, and checking §15 for any Tier-0-relevant gap.
+
+[2026-07-04T14:25:00] TIER 0 VERIFY — COMPLETE
+Read senior-fullstack-developer.build.log's Task 0.1/0.2/0.3 START/
+COMPLETE entries first (no PIVOT entries logged for Tier 0 — straight
+build, nothing to double-check for a hidden shortcut).
+
+Backend (Task 0.1):
+- `pytest -v` from backend/ (venv, `pip install -e ".[dev]"` already
+  synced): 4/4 PASSED — tests/test_health.py::test_health,
+  tests/test_health.py::test_health_v1_prefix,
+  tests/test_db.py::test_local_sqlite_connection,
+  tests/test_db.py::test_turso_style_url_is_translated. One benign
+  deprecation warning (starlette TestClient/httpx), not a failure.
+- `ruff check .` -> "All checks passed!"
+- `mypy app` (strict) -> "Success: no issues found in 10 source files"
+- Booted `uvicorn app.main:app` on :8321, curled both `/health` and
+  `/api/v1/health` -> `{"status":"ok"}`, HTTP 200 on both.
+- Manually re-verified the Turso-env-var-swap claim independent of the
+  unit test: ran `TURSO_DATABASE_URL=libsql://example-org.turso.io
+  TURSO_AUTH_TOKEN=faketoken123 python -c "from app import db;
+  db.reset_engine_cache(); print(db._build_connection_url())"` ->
+  `sqlite+libsql://example-org.turso.io?authToken=faketoken123&secure=true`,
+  matching BuildPlan's "one-line manual check" wording literally, not
+  just via the pytest proxy for it.
+Note: test_health.py/test_db.py exist and pass, which exceeds Task
+0.1's stated gate ("boots + a one-line manual check, not a full test
+suite yet") — that's a strictly stronger position than the gate
+requires, not a shortfall. No §15 subsection actually applies yet to
+Tier 0's code (no tokenizer, no models, no rate limiting, no OAuth
+exist yet) — the closest hooks are §15.1's tokenizer/rate-limiter items
+and §15.3's real-SQLite integration item, both explicitly Tier 1/3
+work per BuildPlan; nothing at Tier 0 is a §15 gap.
+
+Frontend (Task 0.1):
+- `npx eslint . --max-warnings 0` -> exit 0, no output (clean).
+- `npx tsc -b --noEmit` -> exit 0, no output (clean).
+- `npx vitest run` -> 1 test file, 1 test passed (App.test.tsx renders
+  "LitList").
+- `npm run build` -> succeeded (`tsc -b && vite build`), produced
+  dist/index.html + dist/assets/index-*.{css,js}, Tailwind CSS present
+  in the built CSS bundle.
+- Booted `vite --port 5183 --host 127.0.0.1`, curled `/` -> HTTP 200,
+  returned the expected empty shell HTML (`<div id="root">` +
+  `src/main.tsx` module script, `<title>LitList</title>`), consistent
+  with the placeholder `App.tsx` (h1 "LitList" only, real screens
+  deferred to Task 2B per its own comment).
+
+Contracts and fixtures (Tasks 0.2/0.3):
+- `/CONTRACTS.md` exists at repo root (10,775 bytes), covers all three
+  shapes BuildPlan.md 0.2 calls for: segmented-abstract response,
+  API error shape (incl. distinct `service_unavailable` vs.
+  `rate_limited` codes), Zotero push per-item response shape.
+- `fixtures/` exists with all three required subdirs: `tokenizer/`
+  (abbreviation_corpus.json), `pubmed/` (esearch_response.json,
+  esearch_zero_results.json, esummary_response.json,
+  icite_response.json, efetch_response.xml), `zotero/`
+  (collections_response.json, item_creation_response.json), plus a
+  README.md indexing consumers.
+- Verified every fixture is well-formed, independently (not just
+  trusting 0.3's self-report): `json.load()` succeeded on all 7 JSON
+  files; `xml.etree.ElementTree.parse()` succeeded on efetch_response.xml.
+- Read the full tokenizer corpus (abbreviation_corpus.json): 11 cases,
+  confirmed it actually contains the specific regressions this project
+  is known to require testing for (§15.1/§15.9) — "Fig. 2" (case
+  figure_reference), "vs." (versus_abbreviation), "et al." (both
+  et_al_citation, a non-splitting mid-sentence case, AND
+  abbreviation_at_true_sentence_end, the harder case where "et al." IS
+  followed by a genuine new sentence) — plus e.g./i.e., "E. coli",
+  "Dr."/"approx.", decimal numbers, and two abbreviation-free baseline
+  cases to catch an over-fitted tokenizer that under-splits. This is
+  good-faith, non-trivial coverage of the exact edge cases called out
+  in this role's brief, though note it is currently an *unconsumed*
+  golden-file fixture — no test in Tier 0 runs it yet, since the
+  tokenizer itself (Task 1D) doesn't exist yet. That's expected/correct
+  for Tier 0's scope, not a gap in Tier 0 itself, but flagging so Task
+  1D's verification explicitly checks the tokenizer's real tests
+  actually import and run this exact fixture file rather than
+  reinventing a smaller corpus.
+
+Coverage assessment: Tier 0 has no feature-behavior tests to write
+(there is no feature yet) — its own stated gate is scaffolding boots +
+docs/fixtures committed, which is a lower bar than a §15 suite. All
+parts of that lower bar are independently re-verified above, not taken
+on the fullstack agent's word.
+
+VERDICT: Tier 0 exit gate IS MET. Both apps boot cleanly (backend
+pytest/ruff/mypy all green, uvicorn serves /health; frontend
+eslint/tsc/vitest/build all green, vite dev server serves the empty
+shell). db.py's local-SQLite and Turso-env-var paths both verified
+working. CONTRACTS.md and the full fixtures/ corpus (pubmed, zotero,
+tokenizer subdirs) exist, are committed, and are well-formed. No
+outstanding failures. One forward-looking flag only (not a Tier-0
+blocker): confirm at Task 1D's verification that the tokenizer's real
+pytest suite consumes fixtures/tokenizer/abbreviation_corpus.json
+directly rather than duplicating it, per BuildPlan's explicit reason
+for building this fixture once.

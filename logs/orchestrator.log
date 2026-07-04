@@ -9,3 +9,20 @@ replacement orchestrator session — or the human, auditing after the
 fact — has continuity instead of reconstructing "why was this merged"
 from five other logs and git history. Newest entries at the bottom. Do
 not delete or rewrite prior entries.
+
+[2026-07-04] Tier 0 (Tasks 0.1/0.2/0.3) — MERGE CONFIRMED
+Verified both gate entries exist before treating Tier 0 as closed:
+tester's `TIER 0 VERIFY — COMPLETE` (verdict: exit gate met) and
+adversarial-generalist's `REVIEW: Tier 0 — COMPLETE` (2 real findings,
+1 stale-read false alarm). Adversarial finding #2 (CONTRACTS.md
+segmented-abstract example violated its own end-exclusive-slice
+invariant on two segments) was a real defect reaching a merged
+artifact — fixed directly in CONTRACTS.md rather than re-dispatching,
+since it was a doc-only one-line arithmetic fix, verified by direct
+Python len()/slice check. Finding #3 (tokenizer "et al." vs. "Dr."
+disambiguation) carried forward as a note, not a Tier 0 blocker.
+Tier 0 closed. Proceeding to Tier 1 Wave 1 (Task 1A, solo per
+BuildPlan's explicit note that 1A must merge before 1C can truly claim
+independence) run concurrently with Tier 2 (Tasks 2A-2D, 4 parallel
+frontend subagents), since Tier 2 depends only on Tier 0's contracts,
+not Tier 1's implementation, per BuildPlan.md line 452-457.

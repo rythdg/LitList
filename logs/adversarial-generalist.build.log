@@ -4,3 +4,120 @@ This file is the human's timesheet-equivalent for this agent role — read
 in place of a status meeting. Every entry follows the format described in
 this agent's system prompt (`.claude/agents/adversarial-generalist.md`).
 Newest entries at the bottom. Do not delete or rewrite prior entries.
+
+[2026-07-04T14:30:00] REVIEW: Tier 0 (Tasks 0.1/0.2/0.3) — START
+Reviewing the 3 committed Tier 0 commits against BuildPlan.md lines
+314-368 (exit gate: scaffolding boots; CONTRACTS.md + fixture corpus
+committed; later tasks reference them) and SPEC.md §9 (data model),
+§10.2-10.4 (session/error/endpoint shapes), §6.5/§7.5 (segmented-
+abstract), §8.6/8.7 (Zotero push). Checked backend/app/db.py's SQLite/
+Turso claim, CONTRACTS.md's three pinned shapes against their SPEC
+citations, fixtures/ for corpus completeness, and tester's own log for
+its Tier 0 verdict.
+
+[2026-07-04T14:55:00] REVIEW: Tier 0 — COMPLETE
+
+Findings, most severe first:
+
+1. BLOCKING — Process gate violated: no tester COMPLETE/verdict entry
+   exists for Tier 0, yet the work is already committed to main.
+   `logs/tester.build.log` contains only a `[2026-07-04T14:00:00] TIER 0
+   VERIFY — START` entry (14 lines total, file ends there) — no
+   COMPLETE entry, no itemized pass/fail, no explicit "gate met/not
+   met" verdict. BuildPlan.md's merge protocol (lines ~178-183) states
+   explicitly: "A merge requires proof, not a specialist's word... No
+   entry, no merge — go dispatch the missing check instead of
+   proceeding on trust," and this is stated to apply to every wave.
+   `senior-fullstack-developer`'s own Tier 0 COMPLETE entry even flags
+   this itself ("tester should still independently verify... this
+   agent's own COMPLETE entries are not a substitute for that per the
+   'no entry, no merge' rule") — but the commits landed on `main`
+   anyway before that verification was completed and logged. Concrete
+   consequence: nothing in this review's other findings (e.g. #2 below)
+   has actually been caught by the process step designed to catch it,
+   because that step never ran to completion.
+
+2. SIGNIFICANT — CONTRACTS.md's own worked example contradicts its own
+   stated invariant for the segmented-abstract shape. The doc states
+   "Display char range of `display_text`... 0-indexed, end-exclusive
+   (`display_abstract[char_start:char_end] === display_text`)". For the
+   example's segment index 1, `display_text` = "Prior work has shown
+   mixed results in Fig. 2, e.g. reduced uptake vs. controls." — verified
+   length 79 characters (`len()` checked directly) — but the example
+   gives `char_start: 12, char_end: 92`, i.e. a 80-char span, one too
+   long, so the pinned example does not actually satisfy the pinned
+   invariant. Any agent (1D writing the tokenizer, or a tester writing
+   an assertion) that copies this example verbatim as a reference/golden
+   value will encode the off-by-one. Not a code bug (CONTRACTS.md is
+   docs-only per its own text) but a real inconsistency in the one
+   cross-team artifact whose entire purpose is to prevent two agents
+   from silently diverging.
+
+3. MINOR — fixtures/tokenizer/abbreviation_corpus.json sets up a
+   disambiguation problem it doesn't document a solution strategy for:
+   case `abbreviation_at_true_sentence_end` requires splitting after
+   "et al." when followed by a capitalized new sentence ("Chen et al.
+   The mechanism..."), while case `titles_and_approx` requires NEVER
+   splitting after "Dr." even though it is always followed by a
+   capitalized proper name ("Dr. Alvarez led..."). A tokenizer using the
+   simplest heuristic that satisfies the et-al case (split when the next
+   token is capitalized) will fail the Dr. case, and vice versa —
+   correct behavwior requires per-abbreviation-class rules (title
+   abbreviations exempted from the capitalization check entirely) that
+   the fixture/README doesn't call out. This is a legitimate hard
+   requirement for whoever builds 1D, not a defect in Tier 0's
+   deliverable, but worth flagging now since both 1D and 2D will
+   independently discover it.
+
+Verified as sound (tried to break, could not):
+- backend/app/db.py: local SQLite path is genuinely tested
+  (test_local_sqlite_connection round-trips `select 1`); Turso path is
+  only tested for URL translation (test_turso_style_url_is_translated),
+  and the module's own docstring/comment explicitly defers the real
+  network round-trip to Task 5A — this matches BuildPlan.md's own scope
+  for 0.1 ("a one-line manual check, not a full test suite yet"), so
+  it's not a false "done" claim. Manually confirmed `create_engine` +
+  `.connect()` against a `sqlite+libsql://` URL exercises the real
+  libsql dialect (fails with a DNS/host-not-found error against the fake
+  host, as expected, not an import/dialect error).
+- CONTRACTS.md's field names and cited SPEC sections check out on
+  direct comparison: `Paper.display_abstract`/`spoken_abstract` (§9.2),
+  the `{"error":{"code","message"}}` shape (§10.3, verbatim match), the
+  §10.2 OAuth session-binding description behind `zotero_session_mismatch`,
+  and §6.5's index-based sync mechanism behind `AbstractSegment.index`
+  all match what's actually written in SPEC.md, not a stretched citation.
+- fixtures/pubmed and fixtures/zotero: well-formed (JSON parses; EFetch
+  XML parses via ElementTree, 3 PubmedArticle entries), cross-consistent
+  PMIDs across esearch/esummary/efetch/icite, and cover the specific
+  edge cases Task 0.3 calls for (missing DOI, retracted-publication
+  badge, non-English/no-translation language mismatch, nullable
+  citation count, partial Zotero batch failure).
+- Backend pytest (4/4), ruff, and mypy --strict all pass; frontend
+  `tsc -b && vite build`, `vitest run` (1/1), and `eslint --max-warnings
+  0` all pass — the scaffolding boot claim itself is real, not
+  aspirational.
+
+Reported to orchestrator: finding #1 blocks declaring Tier 0's exit gate
+met until tester logs an actual COMPLETE/verdict entry; finding #2 goes
+back to senior-fullstack-developer to fix the example's char_end (should
+be 91, and downstream offsets recomputed) in the same piece of work per
+CONTRACTS.md's own change-log discipline.
+
+[2026-07-04T15:05:00] ORCHESTRATOR FOLLOW-UP
+Finding #1: stale read — tester's TIER 0 VERIFY — COMPLETE entry was
+logged at 14:25:00, before this review's START (14:30:00); this review's
+own log-read apparently raced an in-flight write and caught the file
+mid-append. Confirmed by re-reading logs/tester.build.log directly: full
+COMPLETE entry with itemized pass/fail and an explicit "Tier 0 exit gate
+IS MET" verdict is present. No process violation — not a re-dispatch item.
+
+Finding #2: confirmed and fixed directly in CONTRACTS.md. Segment index 1
+char_end corrected 92 -> 91 (79-char display_text). While fixing, found
+the same off-by-one repeated on segment index 3 ("We enrolled 40
+participants across two sites.", 45 chars): char_end corrected 149 -> 148.
+Segments 0 and 2 (section headers) were already correct. Both fixes
+verified by direct Python len()/slice check against the literal example
+strings.
+
+Finding #3 (tokenizer disambiguation heuristic): no action at Tier 0 —
+carried forward as a note for whoever verifies Task 1D/2D.

@@ -6,3 +6,21 @@ Posted by the orchestrator at the close of every wave: one line per task
 build.logs (plus orchestrator.log) remain the detailed record for when
 you want to go deeper on any one line here. Newest entries at the bottom.
 Do not delete or rewrite prior entries.
+
+## 2026-07-04
+
+- Tier 0 (Tasks 0.1/0.2/0.3): DONE — tester independently verified the exit
+  gate. Backend: 4/4 pytest passed, ruff clean, mypy strict clean, /health
+  boots. Frontend: ESLint/tsc clean, 1/1 Vitest passed, build succeeds,
+  Vite shell serves. CONTRACTS.md and fixtures/ (pubmed/zotero/tokenizer)
+  present and committed. See logs/tester.build.log for full detail.
+- Adversarial review of Tier 0: DONE. Found and we fixed a real
+  off-by-one bug in CONTRACTS.md's segmented-abstract worked example
+  (char_end was 1 too long on two segments, contradicting the doc's own
+  end-exclusive-slice invariant) — fixed in CONTRACTS.md. Flagged a
+  tokenizer-corpus disambiguation note ("et al." vs. "Dr." splitting
+  rules) forward to Task 1D/2D, no Tier 0 action needed. One apparent
+  process-gate concern (tester log looked incomplete) turned out to be a
+  stale read racing an in-flight log write — confirmed no real issue.
+- Tier 0 exit gate: CONFIRMED MET (independently, by both tester and
+  adversarial review) after the CONTRACTS.md fix above.
