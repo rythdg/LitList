@@ -1,0 +1,48 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<div style="{{ wrapStyle }}" aria-label="Next up">
+  <span style="{{ eyebrowStyle }}">Next</span>
+  <sc-if value="{{ hasNext }}" hint-placeholder-val="{{ true }}">
+    <span style="{{ titleStyle }}">{{ title }}</span>
+  </sc-if>
+  <sc-if value="{{ empty }}" hint-placeholder-val="">
+    <span style="{{ emptyStyle }}">End of queue</span>
+  </sc-if>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{&quot;$preview&quot;:{&quot;width&quot;:360,&quot;height&quot;:64},&quot;title&quot;:{&quot;editor&quot;:&quot;text&quot;,&quot;default&quot;:&quot;Temporal Coding in Cortical Microcircuits&quot;,&quot;tsType&quot;:&quot;string&quot;}}">
+class Component extends DCLogic {
+  renderVals() {
+    const p = this.props;
+    const font = "Tahoma, Verdana, Geneva, 'DejaVu Sans', sans-serif";
+    const title = p.title || '';
+    return {
+      title,
+      hasNext: !!title,
+      empty: !title,
+      wrapStyle: {
+        display: 'flex', alignItems: 'center', gap: '11px', width: '100%', boxSizing: 'border-box',
+        padding: '12px 16px', background: '#F7F7F5', border: '1px solid #EDEDEA', borderRadius: '10px', fontFamily: font,
+      },
+      eyebrowStyle: {
+        flex: 'none', font: `700 10px/1 ${font}`, letterSpacing: '.12em', textTransform: 'uppercase',
+        color: '#F05A22', padding: '4px 7px', background: '#FDEDE5', borderRadius: '5px',
+      },
+      titleStyle: {
+        flex: 1, minWidth: 0, font: `500 14px/1.35 ${font}`, color: '#595959',
+        overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+      },
+      emptyStyle: { flex: 1, font: `400 14px/1.35 ${font}`, color: '#B3B3B3', fontStyle: 'italic' },
+    };
+  }
+}
+</script>
+</body>
+</html>

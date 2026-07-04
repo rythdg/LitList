@@ -1,0 +1,65 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet><style>@keyframes ll-btn-spin { to { transform: rotate(360deg); } }</style></helmet>
+<button type="{{ htmlType }}" disabled="{{ disabled }}" onClick="{{ onClick }}" aria-label="{{ ariaLabel }}" style="{{ style }}" style-hover="{{ hoverStyle }}" style-active="{{ activeStyle }}">
+  <sc-if value="{{ loading }}" hint-placeholder-val="">
+    <span style="{{ spinnerStyle }}"></span>
+  </sc-if>
+  <span style="{{ labelWrap }}">{{ label }}</span>
+</button>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{&quot;$preview&quot;:{&quot;width&quot;:240,&quot;height&quot;:72},&quot;label&quot;:{&quot;editor&quot;:&quot;text&quot;,&quot;default&quot;:&quot;Push to Zotero&quot;,&quot;tsType&quot;:&quot;string&quot;},&quot;variant&quot;:{&quot;editor&quot;:&quot;enum&quot;,&quot;default&quot;:&quot;primary&quot;,&quot;options&quot;:[&quot;primary&quot;,&quot;secondary&quot;,&quot;ghost&quot;,&quot;danger&quot;,&quot;success&quot;],&quot;tsType&quot;:&quot;'primary'|'secondary'|'ghost'|'danger'|'success'&quot;},&quot;size&quot;:{&quot;editor&quot;:&quot;enum&quot;,&quot;default&quot;:&quot;md&quot;,&quot;options&quot;:[&quot;sm&quot;,&quot;md&quot;,&quot;lg&quot;],&quot;tsType&quot;:&quot;'sm'|'md'|'lg'&quot;},&quot;fullWidth&quot;:{&quot;editor&quot;:&quot;boolean&quot;,&quot;default&quot;:false,&quot;tsType&quot;:&quot;boolean&quot;},&quot;disabled&quot;:{&quot;editor&quot;:&quot;boolean&quot;,&quot;default&quot;:false,&quot;tsType&quot;:&quot;boolean&quot;},&quot;loading&quot;:{&quot;editor&quot;:&quot;boolean&quot;,&quot;default&quot;:false,&quot;tsType&quot;:&quot;boolean&quot;},&quot;onClick&quot;:{&quot;editor&quot;:null,&quot;tsType&quot;:&quot;() =&gt; void&quot;}}">
+class Component extends DCLogic {
+  renderVals() {
+    const p = this.props;
+    const font = "Tahoma, Verdana, Geneva, 'DejaVu Sans', sans-serif";
+    const variant = p.variant || 'primary';
+    const size = p.size || 'md';
+    const disabled = !!p.disabled || !!p.loading;
+    const pad = { sm: '8px 14px', md: '12px 20px', lg: '15px 30px' }[size];
+    const fs = { sm: 13, md: 15, lg: 17 }[size];
+    const base = {
+      display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: '9px',
+      font: `600 ${fs}px/1 ${font}`, padding: pad, borderRadius: '8px', cursor: disabled ? 'not-allowed' : 'pointer',
+      border: '1px solid transparent', width: p.fullWidth ? '100%' : 'auto', textAlign: 'center',
+      transition: 'background .15s cubic-bezier(.4,0,.2,1), border-color .15s, opacity .15s', userSelect: 'none',
+      opacity: disabled ? 0.5 : 1,
+    };
+    const skins = {
+      primary: { bg: '#F05A22', fg: '#fff', bd: 'transparent', hbg: '#D94A15' },
+      secondary: { bg: '#fff', fg: '#1A1A1A', bd: '#D9D9D9', hbg: '#F2F2F2' },
+      ghost: { bg: 'transparent', fg: '#1A1A1A', bd: 'transparent', hbg: '#F2F2F2' },
+      danger: { bg: 'transparent', fg: '#AB0C23', bd: '#E4B7BE', hbg: '#FBEDEF' },
+      success: { bg: '#6E9A1F', fg: '#fff', bd: 'transparent', hbg: '#5C801A' },
+    };
+    const s = skins[variant] || skins.primary;
+    const style = { ...base, background: s.bg, color: s.fg, borderColor: s.bd };
+    return {
+      label: p.label || 'Button',
+      htmlType: p.htmlType || 'button',
+      disabled, loading: !!p.loading,
+      ariaLabel: p.ariaLabel || p.label || 'Button',
+      onClick: disabled ? undefined : p.onClick,
+      style,
+      hoverStyle: disabled ? style : { background: s.hbg, borderColor: variant === 'secondary' ? '#D9D9D9' : s.bd },
+      activeStyle: disabled ? style : { opacity: 0.9 },
+      labelWrap: { display: 'inline-flex', alignItems: 'center', gap: '8px' },
+      spinnerStyle: {
+        width: '15px', height: '15px', borderRadius: '50%', flex: 'none',
+        border: `2px solid ${variant === 'primary' || variant === 'success' ? 'rgba(255,255,255,.5)' : 'rgba(0,0,0,.2)'}`,
+        borderTopColor: variant === 'primary' || variant === 'success' ? '#fff' : '#1A1A1A',
+        animation: 'll-btn-spin .7s linear infinite',
+      },
+    };
+  }
+}
+</script>
+</body>
+</html>

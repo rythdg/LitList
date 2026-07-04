@@ -1,0 +1,159 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<div style="{{ backdropStyle }}" onClick="{{ onBackdrop }}">
+  <div style="{{ cardStyle }}" role="dialog" aria-modal="true" aria-label="Push to Zotero">
+
+    <sc-if value="{{ isConnect }}" hint-placeholder-val="{{ true }}">
+      <div style="{{ padStyle }}">
+        <div style="{{ iconCircle }}"><svg viewBox="0 0 24 24" fill="none" style="{{ bigIcon }}"><path d="M12 3v12m0 0l4-4m-4 4l-4-4" stroke="#F05A22" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"></path><path d="M5 18v1a2 2 0 002 2h10a2 2 0 002-2v-1" stroke="#F05A22" stroke-width="1.9" stroke-linecap="round"></path></svg></div>
+        <h3 style="{{ titleStyle }}">Connect your Zotero account</h3>
+        <p style="{{ subStyle }}">Sign in once to push saved papers straight into your library. You stay in control — LitList never stores your papers.</p>
+        <div style="{{ actionsCol }}">
+          <dc-import name="LLButton" label="Connect to Zotero" variant="primary" full-width="{{ true }}" on-click="{{ onConnect }}" hint-size="100%,48px"></dc-import>
+          <dc-import name="LLButton" label="Cancel" variant="ghost" full-width="{{ true }}" on-click="{{ onCancel }}" hint-size="100%,44px"></dc-import>
+        </div>
+      </div>
+    </sc-if>
+
+    <sc-if value="{{ isChoose }}" hint-placeholder-val="">
+      <div style="{{ padStyle }}">
+        <h3 style="{{ titleStyle }}">Save {{ paperCount }} papers to:</h3>
+        <div style="{{ collListStyle }}">
+          <sc-for list="{{ collItems }}" as="c" hint-placeholder-count="3">
+            <label style="{{ c.rowStyle }}" style-hover="{{ collHover }}">
+              <span style="{{ c.dotOuter }}"><span style="{{ c.dotInner }}"></span></span>
+              <span style="{{ c.labelStyle }}">{{ c.label }}</span>
+              <input type="radio" name="ll-zc" checked="{{ c.checked }}" onChange="{{ c.onSelect }}" style="{{ srOnly }}" />
+            </label>
+          </sc-for>
+          <label style="{{ newRowStyle }}" style-hover="{{ collHover }}">
+            <span style="{{ newDotOuter }}"><span style="{{ newDotInner }}"></span></span>
+            <span style="{{ newLabelStyle }}">+ New collection…</span>
+            <input type="radio" name="ll-zc" checked="{{ isNewMode }}" onChange="{{ onPickNew }}" style="{{ srOnly }}" />
+          </label>
+          <sc-if value="{{ isNewMode }}" hint-placeholder-val="">
+            <input type="text" value="{{ newName }}" placeholder="Collection name" onInput="{{ onNewNameInput }}" autoFocus="{{ true }}" style="{{ newInputStyle }}" />
+          </sc-if>
+        </div>
+        <sc-if value="{{ offline }}" hint-placeholder-val="">
+          <div style="{{ offlineNote }}">You're offline — this will be marked pending and retried automatically.</div>
+        </sc-if>
+        <div style="{{ actionsRow }}">
+          <dc-import name="LLButton" label="Cancel" variant="ghost" on-click="{{ onCancel }}" hint-size="auto,44px"></dc-import>
+          <dc-import name="LLButton" label="{{ saveLabel }}" variant="primary" disabled="{{ saveDisabled }}" on-click="{{ onSaveClick }}" hint-size="auto,44px"></dc-import>
+        </div>
+      </div>
+    </sc-if>
+
+    <sc-if value="{{ isSaving }}" hint-placeholder-val="">
+      <div style="{{ padCenter }}">
+        <dc-import name="LLSynapseLoader" size="{{ 52 }}" label="Saving to Zotero…" hint-size="180,120"></dc-import>
+      </div>
+    </sc-if>
+
+    <sc-if value="{{ isSuccess }}" hint-placeholder-val="">
+      <div style="{{ padStyle }}">
+        <div style="{{ successCircle }}"><svg viewBox="0 0 24 24" fill="none" style="{{ bigIcon }}"><path d="M20 6L9 17l-5-5" stroke="#6E9A1F" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"></path></svg></div>
+        <h3 style="{{ titleStyle }}">Saved {{ paperCount }} papers</h3>
+        <p style="{{ subStyle }}">Added to “{{ targetName }}” in your Zotero library.</p>
+        <dc-import name="LLButton" label="Done" variant="primary" full-width="{{ true }}" on-click="{{ onDone }}" hint-size="100%,48px"></dc-import>
+      </div>
+    </sc-if>
+
+    <sc-if value="{{ isError }}" hint-placeholder-val="">
+      <div style="{{ padStyle }}">
+        <div style="{{ errorCircle }}"><svg viewBox="0 0 24 24" fill="none" style="{{ bigIcon }}"><path d="M12 8v5M12 16.5v.5" stroke="#AB0C23" stroke-width="2.4" stroke-linecap="round"></path><path d="M10.3 3.9L2.5 18a2 2 0 001.7 3h15.6a2 2 0 001.7-3L13.7 3.9a2 2 0 00-3.4 0z" stroke="#AB0C23" stroke-width="1.9" stroke-linejoin="round"></path></svg></div>
+        <h3 style="{{ titleStyle }}">{{ errorTitle }}</h3>
+        <p style="{{ subStyle }}">{{ errorMessage }}</p>
+        <div style="{{ actionsCol }}">
+          <dc-import name="LLButton" label="Retry" variant="primary" full-width="{{ true }}" on-click="{{ onRetry }}" hint-size="100%,48px"></dc-import>
+          <dc-import name="LLButton" label="Download CSV instead" variant="secondary" full-width="{{ true }}" on-click="{{ onDownloadCsv }}" hint-size="100%,48px"></dc-import>
+        </div>
+      </div>
+    </sc-if>
+
+  </div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{&quot;$preview&quot;:{&quot;width&quot;:440,&quot;height&quot;:460},&quot;step&quot;:{&quot;editor&quot;:&quot;enum&quot;,&quot;default&quot;:&quot;choose&quot;,&quot;options&quot;:[&quot;connect&quot;,&quot;choose&quot;,&quot;saving&quot;,&quot;success&quot;,&quot;error&quot;],&quot;tsType&quot;:&quot;'connect'|'choose'|'saving'|'success'|'error'&quot;},&quot;paperCount&quot;:{&quot;editor&quot;:&quot;int&quot;,&quot;default&quot;:7,&quot;tsType&quot;:&quot;number&quot;},&quot;collections&quot;:{&quot;editor&quot;:null,&quot;default&quot;:[{&quot;id&quot;:&quot;c1&quot;,&quot;name&quot;:&quot;Reading List&quot;},{&quot;id&quot;:&quot;c2&quot;,&quot;name&quot;:&quot;Neuro Journal Club&quot;}],&quot;tsType&quot;:&quot;Array&lt;{id:string,name:string}&gt;&quot;},&quot;selectedId&quot;:{&quot;editor&quot;:&quot;text&quot;,&quot;default&quot;:&quot;c1&quot;,&quot;tsType&quot;:&quot;string&quot;},&quot;targetName&quot;:{&quot;editor&quot;:&quot;text&quot;,&quot;default&quot;:&quot;Neuro Journal Club&quot;,&quot;tsType&quot;:&quot;string&quot;},&quot;errorKind&quot;:{&quot;editor&quot;:&quot;enum&quot;,&quot;default&quot;:&quot;push&quot;,&quot;options&quot;:[&quot;auth&quot;,&quot;push&quot;],&quot;tsType&quot;:&quot;'auth'|'push'&quot;},&quot;errorMessage&quot;:{&quot;editor&quot;:&quot;text&quot;,&quot;default&quot;:&quot;&quot;,&quot;tsType&quot;:&quot;string&quot;},&quot;offline&quot;:{&quot;editor&quot;:&quot;boolean&quot;,&quot;default&quot;:false,&quot;tsType&quot;:&quot;boolean&quot;},&quot;onConnect&quot;:{&quot;editor&quot;:null,&quot;tsType&quot;:&quot;() =&gt; void&quot;},&quot;onSave&quot;:{&quot;editor&quot;:null,&quot;tsType&quot;:&quot;(target:{collectionId?:string,newName?:string}) =&gt; void&quot;},&quot;onCancel&quot;:{&quot;editor&quot;:null,&quot;tsType&quot;:&quot;() =&gt; void&quot;},&quot;onDone&quot;:{&quot;editor&quot;:null,&quot;tsType&quot;:&quot;() =&gt; void&quot;},&quot;onRetry&quot;:{&quot;editor&quot;:null,&quot;tsType&quot;:&quot;() =&gt; void&quot;},&quot;onDownloadCsv&quot;:{&quot;editor&quot;:null,&quot;tsType&quot;:&quot;() =&gt; void&quot;}}">
+class Component extends DCLogic {
+  state = { mode: 'existing', selectedId: null, newName: '' };
+
+  sel() {
+    const colls = Array.isArray(this.props.collections) ? this.props.collections : [];
+    return this.state.selectedId || this.props.selectedId || (colls[0] && colls[0].id) || null;
+  }
+  renderVals() {
+    const p = this.props;
+    const font = "Tahoma, Verdana, Geneva, 'DejaVu Sans', sans-serif";
+    const step = p.step || 'connect';
+    const colls = Array.isArray(p.collections) ? p.collections : [];
+    const isNewMode = this.state.mode === 'new';
+    const selId = this.sel();
+    const collItems = colls.map((c) => {
+      const checked = !isNewMode && c.id === selId;
+      return {
+        label: c.name, checked,
+        onSelect: () => this.setState({ mode: 'existing', selectedId: c.id }),
+        rowStyle: { display: 'flex', alignItems: 'center', gap: '11px', padding: '11px 10px', borderRadius: '8px', cursor: 'pointer', position: 'relative' },
+        dotOuter: { flex: 'none', width: '20px', height: '20px', borderRadius: '50%', border: `1.75px solid ${checked ? '#F05A22' : '#B3B3B3'}`, display: 'inline-flex', alignItems: 'center', justifyContent: 'center' },
+        dotInner: { width: '10px', height: '10px', borderRadius: '50%', background: '#F05A22', transform: checked ? 'scale(1)' : 'scale(0)', transition: 'transform .15s' },
+        labelStyle: { font: `${checked ? 600 : 400} 15px/1.3 ${font}`, color: '#1A1A1A' },
+      };
+    });
+    const errAuth = p.errorKind === 'auth';
+    const saveDisabled = isNewMode ? !this.state.newName.trim() : !selId;
+    return {
+      isConnect: step === 'connect', isChoose: step === 'choose', isSaving: step === 'saving',
+      isSuccess: step === 'success', isError: step === 'error',
+      paperCount: p.paperCount ?? 0,
+      targetName: p.targetName || 'your collection',
+      collItems, isNewMode, newName: this.state.newName,
+      offline: !!p.offline,
+      saveLabel: p.offline ? 'Pending — will retry' : 'Save',
+      saveDisabled,
+      errorTitle: errAuth ? 'Couldn’t connect to Zotero' : 'Couldn’t save to Zotero',
+      errorMessage: p.errorMessage || (errAuth ? 'Authorization was denied or timed out. Your saved list is unchanged.' : 'A network error occurred. Nothing was lost — your list is unchanged.'),
+      onPickNew: () => this.setState({ mode: 'new' }),
+      onNewNameInput: (e) => this.setState({ newName: e.target.value }),
+      onSaveClick: () => {
+        if (saveDisabled) return;
+        if (isNewMode) p.onSave && p.onSave({ newName: this.state.newName.trim() });
+        else p.onSave && p.onSave({ collectionId: selId });
+      },
+      onConnect: p.onConnect, onCancel: p.onCancel, onDone: p.onDone, onRetry: p.onRetry, onDownloadCsv: p.onDownloadCsv,
+      onBackdrop: (e) => { if (e.target === e.currentTarget && p.onCancel) p.onCancel(); },
+      backdropStyle: { position: 'fixed', inset: 0, background: 'rgba(26,26,26,.5)', backdropFilter: 'blur(6px)', WebkitBackdropFilter: 'blur(6px)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '20px', zIndex: 100, fontFamily: font },
+      cardStyle: { width: '100%', maxWidth: '380px', background: '#fff', borderRadius: '14px', boxShadow: '0 20px 60px rgba(26,26,26,.28)', overflow: 'hidden' },
+      padStyle: { padding: '30px 26px 26px', display: 'flex', flexDirection: 'column' },
+      padCenter: { padding: '48px 26px', display: 'flex', alignItems: 'center', justifyContent: 'center' },
+      iconCircle: { width: '52px', height: '52px', borderRadius: '50%', background: '#FDEDE5', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', marginBottom: '16px' },
+      successCircle: { width: '52px', height: '52px', borderRadius: '50%', background: '#EAF2D9', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', marginBottom: '16px' },
+      errorCircle: { width: '52px', height: '52px', borderRadius: '50%', background: '#FBEDEF', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', marginBottom: '16px' },
+      bigIcon: { width: '28px', height: '28px' },
+      titleStyle: { font: `700 20px/1.3 ${font}`, color: '#1A1A1A', margin: '0 0 8px' },
+      subStyle: { font: `400 14px/1.5 ${font}`, color: '#595959', margin: '0 0 22px' },
+      actionsCol: { display: 'flex', flexDirection: 'column', gap: '9px' },
+      actionsRow: { display: 'flex', justifyContent: 'flex-end', gap: '10px', marginTop: '20px' },
+      collListStyle: { display: 'flex', flexDirection: 'column', gap: '2px', marginBottom: '6px' },
+      newRowStyle: { display: 'flex', alignItems: 'center', gap: '11px', padding: '11px 10px', borderRadius: '8px', cursor: 'pointer', position: 'relative' },
+      newDotOuter: { flex: 'none', width: '20px', height: '20px', borderRadius: '50%', border: `1.75px solid ${isNewMode ? '#F05A22' : '#B3B3B3'}`, display: 'inline-flex', alignItems: 'center', justifyContent: 'center' },
+      newDotInner: { width: '10px', height: '10px', borderRadius: '50%', background: '#F05A22', transform: isNewMode ? 'scale(1)' : 'scale(0)', transition: 'transform .15s' },
+      newLabelStyle: { font: `${isNewMode ? 600 : 400} 15px/1.3 ${font}`, color: '#F05A22' },
+      newInputStyle: { margin: '6px 0 0 31px', padding: '10px 12px', border: '1px solid #B3B3B3', borderRadius: '8px', font: `400 15px/1.2 ${font}`, color: '#1A1A1A', outline: 'none' },
+      collHover: { background: '#F7F7F5' },
+      offlineNote: { font: `400 13px/1.4 ${font}`, color: '#8a6d00', background: '#FEF2DA', padding: '10px 12px', borderRadius: '8px', marginTop: '6px' },
+      srOnly: { position: 'absolute', opacity: 0, width: '1px', height: '1px', pointerEvents: 'none' },
+    };
+  }
+}
+</script>
+</body>
+</html>

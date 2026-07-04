@@ -1,0 +1,60 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet><style>
+@keyframes ll-play-shake { 0%,100%{transform:translateX(0)} 20%{transform:translateX(-5px)} 40%{transform:translateX(5px)} 60%{transform:translateX(-3px)} 80%{transform:translateX(3px)} }
+@keyframes ll-play-ring { 0%{transform:scale(1);opacity:.5} 100%{transform:scale(1.5);opacity:0} }
+</style></helmet>
+<button type="button" onClick="{{ onClick }}" disabled="{{ disabled }}" aria-label="{{ ariaLabel }}" aria-pressed="{{ playing }}" style="{{ btnStyle }}" style-hover="{{ hoverStyle }}" style-active="{{ activeStyle }}">
+  <sc-if value="{{ pulsing }}" hint-placeholder-val="">
+    <span style="{{ ringStyle }}"></span>
+  </sc-if>
+  <sc-if value="{{ playing }}" hint-placeholder-val="">
+    <svg viewBox="0 0 24 24" fill="none" style="{{ iconStyle }}" aria-hidden="true"><rect x="7" y="5" width="3.6" height="14" rx="1.1" fill="currentColor"></rect><rect x="13.4" y="5" width="3.6" height="14" rx="1.1" fill="currentColor"></rect></svg>
+  </sc-if>
+  <sc-if value="{{ showPlay }}" hint-placeholder-val="{{ true }}">
+    <svg viewBox="0 0 24 24" fill="none" style="{{ playIconStyle }}" aria-hidden="true"><path d="M8 5.5v13l11-6.5z" fill="currentColor"></path></svg>
+  </sc-if>
+</button>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{&quot;$preview&quot;:{&quot;width&quot;:140,&quot;height&quot;:140},&quot;playing&quot;:{&quot;editor&quot;:&quot;boolean&quot;,&quot;default&quot;:false,&quot;tsType&quot;:&quot;boolean&quot;},&quot;disabled&quot;:{&quot;editor&quot;:&quot;boolean&quot;,&quot;default&quot;:false,&quot;tsType&quot;:&quot;boolean&quot;},&quot;pulse&quot;:{&quot;editor&quot;:&quot;boolean&quot;,&quot;default&quot;:true,&quot;tsType&quot;:&quot;boolean&quot;},&quot;size&quot;:{&quot;editor&quot;:&quot;range&quot;,&quot;default&quot;:76,&quot;min&quot;:48,&quot;max&quot;:120,&quot;unit&quot;:&quot;px&quot;,&quot;tsType&quot;:&quot;number&quot;},&quot;onClick&quot;:{&quot;editor&quot;:null,&quot;tsType&quot;:&quot;() =&gt; void&quot;}}">
+class Component extends DCLogic {
+  renderVals() {
+    const p = this.props;
+    const size = Number(p.size) || 76;
+    const disabled = !!p.disabled;
+    const playing = !!p.playing;
+    return {
+      playing, disabled,
+      showPlay: !playing,
+      pulsing: playing && !disabled && p.pulse !== false,
+      ariaLabel: playing ? 'Pause narration' : 'Play narration',
+      onClick: disabled ? undefined : p.onClick,
+      btnStyle: {
+        position: 'relative', width: size + 'px', height: size + 'px', borderRadius: '50%', border: 'none',
+        background: disabled ? '#E7E7E4' : '#F05A22', color: disabled ? '#B3B3B3' : '#fff',
+        cursor: disabled ? 'not-allowed' : 'pointer', display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+        boxShadow: disabled ? 'none' : '0 10px 30px rgba(240,90,34,.32)',
+        transition: 'background .15s, box-shadow .15s, transform .1s',
+        animation: disabled && p.shake ? 'll-play-shake .4s' : 'none',
+      },
+      hoverStyle: disabled ? {} : { background: '#D94A15' },
+      activeStyle: disabled ? {} : { transform: 'translateY(1px)', boxShadow: '0 6px 18px rgba(240,90,34,.28)' },
+      iconStyle: { width: size * 0.42 + 'px', height: size * 0.42 + 'px', position: 'relative' },
+      playIconStyle: { width: size * 0.46 + 'px', height: size * 0.46 + 'px', marginLeft: size * 0.03 + 'px', position: 'relative' },
+      ringStyle: {
+        position: 'absolute', inset: 0, borderRadius: '50%', border: '2px solid #F05A22',
+        animation: 'll-play-ring 1.8s ease-out infinite',
+      },
+    };
+  }
+}
+</script>
+</body>
+</html>

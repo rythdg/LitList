@@ -1,0 +1,44 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<button type="button" onClick="{{ onClick }}" aria-label="{{ ariaLabel }}" aria-pressed="{{ muted }}" style="{{ btnStyle }}" style-hover="{{ hoverStyle }}">
+  <sc-if value="{{ muted }}" hint-placeholder-val="">
+    <svg viewBox="0 0 24 24" fill="none" style="{{ iconStyle }}" aria-hidden="true"><path d="M4 9v6h3.5L13 20V4L7.5 9H4z" stroke="currentColor" stroke-width="1.75" stroke-linejoin="round"></path><path d="M17 9.5l4 5M21 9.5l-4 5" stroke="currentColor" stroke-width="1.75" stroke-linecap="round"></path></svg>
+  </sc-if>
+  <sc-if value="{{ showOn }}" hint-placeholder-val="{{ true }}">
+    <svg viewBox="0 0 24 24" fill="none" style="{{ iconStyle }}" aria-hidden="true"><path d="M4 9v6h3.5L13 20V4L7.5 9H4z" stroke="currentColor" stroke-width="1.75" stroke-linejoin="round"></path><path d="M16.5 8.5a5 5 0 010 7M19 6a8.5 8.5 0 010 12" stroke="currentColor" stroke-width="1.75" stroke-linecap="round"></path></svg>
+  </sc-if>
+</button>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{&quot;$preview&quot;:{&quot;width&quot;:100,&quot;height&quot;:100},&quot;muted&quot;:{&quot;editor&quot;:&quot;boolean&quot;,&quot;default&quot;:false,&quot;tsType&quot;:&quot;boolean&quot;},&quot;size&quot;:{&quot;editor&quot;:&quot;range&quot;,&quot;default&quot;:48,&quot;min&quot;:32,&quot;max&quot;:72,&quot;unit&quot;:&quot;px&quot;,&quot;tsType&quot;:&quot;number&quot;},&quot;onClick&quot;:{&quot;editor&quot;:null,&quot;tsType&quot;:&quot;() =&gt; void&quot;}}">
+class Component extends DCLogic {
+  renderVals() {
+    const p = this.props;
+    const size = Number(p.size) || 48;
+    const muted = !!p.muted;
+    return {
+      muted,
+      showOn: !muted,
+      ariaLabel: muted ? 'Unmute audio' : 'Mute audio',
+      onClick: p.onClick,
+      btnStyle: {
+        width: size + 'px', height: size + 'px', borderRadius: '50%',
+        border: `1px solid ${muted ? '#D9D9D9' : '#D9D9D9'}`,
+        background: muted ? '#F2F2F2' : '#fff', color: muted ? '#595959' : '#1A1A1A',
+        cursor: 'pointer', display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+        transition: 'background .15s, color .15s, border-color .15s',
+      },
+      hoverStyle: { background: '#F2F2F2' },
+      iconStyle: { width: size * 0.46 + 'px', height: size * 0.46 + 'px' },
+    };
+  }
+}
+</script>
+</body>
+</html>

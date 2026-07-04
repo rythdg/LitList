@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet><style>@keyframes ll-sb-spin { to { transform: rotate(360deg); } }</style></helmet>
+<form onSubmit="{{ onSubmitForm }}" style="{{ formStyle }}" style-focus-within="{{ formFocusStyle }}">
+  <svg viewBox="0 0 24 24" fill="none" style="{{ iconStyle }}" aria-hidden="true">
+    <circle cx="11" cy="11" r="7" stroke="#595959" stroke-width="1.75"></circle>
+    <path d="M20 20l-3.2-3.2" stroke="#595959" stroke-width="1.75" stroke-linecap="round"></path>
+  </svg>
+  <input type="search" value="{{ value }}" placeholder="{{ placeholder }}" onInput="{{ onInputField }}" autoFocus="{{ autofocus }}" aria-label="Search PubMed" style="{{ inputStyle }}" />
+  <sc-if value="{{ loading }}" hint-placeholder-val="">
+    <span style="{{ spinnerStyle }}"></span>
+  </sc-if>
+  <sc-if value="{{ showClear }}" hint-placeholder-val="">
+    <button type="button" onClick="{{ onClear }}" aria-label="Clear search" style="{{ clearStyle }}" style-hover="{{ clearHoverStyle }}">
+      <svg viewBox="0 0 24 24" fill="none" style="{{ clearIconStyle }}" aria-hidden="true">
+        <path d="M6 6l12 12M18 6L6 18" stroke="#595959" stroke-width="1.75" stroke-linecap="round"></path>
+      </svg>
+    </button>
+  </sc-if>
+</form>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{&quot;$preview&quot;:{&quot;width&quot;:420,&quot;height&quot;:90},&quot;value&quot;:{&quot;editor&quot;:&quot;text&quot;,&quot;default&quot;:&quot;&quot;,&quot;tsType&quot;:&quot;string&quot;},&quot;placeholder&quot;:{&quot;editor&quot;:&quot;text&quot;,&quot;default&quot;:&quot;Search PubMed…&quot;,&quot;tsType&quot;:&quot;string&quot;},&quot;loading&quot;:{&quot;editor&quot;:&quot;boolean&quot;,&quot;default&quot;:false,&quot;tsType&quot;:&quot;boolean&quot;},&quot;autofocus&quot;:{&quot;editor&quot;:&quot;boolean&quot;,&quot;default&quot;:false,&quot;tsType&quot;:&quot;boolean&quot;},&quot;onInput&quot;:{&quot;editor&quot;:null,&quot;tsType&quot;:&quot;(value: string) =&gt; void&quot;},&quot;onSubmit&quot;:{&quot;editor&quot;:null,&quot;tsType&quot;:&quot;(value: string) =&gt; void&quot;}}">
+class Component extends DCLogic {
+  renderVals() {
+    const p = this.props;
+    const font = "Tahoma, Verdana, Geneva, 'DejaVu Sans', sans-serif";
+    const value = p.value || '';
+    return {
+      value,
+      placeholder: p.placeholder || 'Search PubMed…',
+      loading: !!p.loading,
+      autofocus: !!p.autofocus,
+      showClear: !p.loading && value.length > 0,
+      onInputField: (e) => p.onInput && p.onInput(e.target.value),
+      onClear: () => p.onInput && p.onInput(''),
+      onSubmitForm: (e) => { e.preventDefault(); p.onSubmit && p.onSubmit(value); },
+      formStyle: {
+        display: 'flex', alignItems: 'center', gap: '10px', width: '100%', boxSizing: 'border-box',
+        padding: '12px 14px', background: '#fff', border: '1px solid #B3B3B3', borderRadius: '10px',
+        transition: 'border-color .15s, box-shadow .15s', fontFamily: font,
+      },
+      formFocusStyle: { borderColor: '#F05A22', boxShadow: '0 0 0 3px rgba(240,90,34,.15)' },
+      iconStyle: { width: '20px', height: '20px', flex: 'none' },
+      inputStyle: {
+        flex: 1, minWidth: 0, border: 'none', outline: 'none', background: 'transparent',
+        font: `400 16px/1.3 ${font}`, color: '#1A1A1A', padding: 0,
+      },
+      spinnerStyle: {
+        width: '18px', height: '18px', flex: 'none', borderRadius: '50%',
+        border: '2px solid rgba(240,90,34,.25)', borderTopColor: '#F05A22',
+        animation: 'll-sb-spin .7s linear infinite',
+      },
+      clearStyle: {
+        display: 'inline-flex', alignItems: 'center', justifyContent: 'center', flex: 'none',
+        width: '26px', height: '26px', borderRadius: '50%', border: 'none', background: '#F2F2F2',
+        cursor: 'pointer', padding: 0, transition: 'background .15s',
+      },
+      clearHoverStyle: { background: '#D9D9D9' },
+      clearIconStyle: { width: '15px', height: '15px' },
+    };
+  }
+}
+</script>
+</body>
+</html>

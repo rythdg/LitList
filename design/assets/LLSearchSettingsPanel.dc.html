@@ -1,0 +1,162 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<div style="{{ panelStyle }}">
+  <div style="{{ grabHandle }}"></div>
+  <div style="{{ headerStyle }}">
+    <button type="button" onClick="{{ onClose }}" aria-label="Close search panel" style="{{ closeStyle }}" style-hover="{{ closeHover }}">
+      <svg viewBox="0 0 24 24" fill="none" style="{{ closeIcon }}"><path d="M6.5 6.5l11 11M17.5 6.5l-11 11" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"></path></svg>
+    </button>
+    <span style="{{ headTitle }}">Search &amp; settings</span>
+    <span style="{{ swipeHint }}">swipe up ⌃</span>
+  </div>
+
+  <div style="{{ bodyStyle }}">
+    <div style="{{ searchRow }}">
+      <dc-import name="LLSearchBar" value="{{ query }}" placeholder="Search PubMed…" loading="{{ loading }}" autofocus="{{ true }}" on-input="{{ onQueryChange }}" on-submit="{{ onStart }}" hint-size="100%,58px"></dc-import>
+      <sc-if value="{{ showCount }}" hint-placeholder-val="">
+        <div style="{{ countStyle }}">{{ resultCountLabel }}</div>
+      </sc-if>
+    </div>
+
+    <div style="{{ section }}">
+      <dc-import name="LLRadioGroup" legend="Sort by" value="{{ sortValue }}" name="ll-sort" options="{{ sortOptions }}" on-change="{{ onSortChange }}" hint-size="100%,150px"></dc-import>
+    </div>
+
+    <div style="{{ section }}">
+      <span style="{{ groupLabel }}">Read aloud</span>
+      <div style="{{ fieldsWrap }}">
+        <sc-for list="{{ fieldItems }}" as="f" hint-placeholder-count="4">
+          <dc-import name="LLCheckboxField" label="{{ f.label }}" checked="{{ f.checked }}" on-change="{{ f.onChange }}" hint-size="100%,42px"></dc-import>
+        </sc-for>
+      </div>
+    </div>
+
+    <div style="{{ section }}">
+      <dc-import name="LLRadioGroup" legend="If I don't swipe" value="{{ defaultValue }}" name="ll-default" options="{{ defaultOptions }}" on-change="{{ onDefaultChange }}" hint-size="100%,110px"></dc-import>
+    </div>
+
+    <div style="{{ section }}">
+      <dc-import name="LLSpeedSlider" label="Speed" value="{{ speed }}" on-change="{{ onSpeedChange }}" hint-size="100%,80px"></dc-import>
+    </div>
+
+    <div style="{{ section }}">
+      <button type="button" onClick="{{ toggleFormat }}" style="{{ discBtn }}" style-hover="{{ discHover }}" aria-expanded="{{ formatOpen }}">
+        <span style="{{ groupLabel }}">Narration format</span>
+        <span style="{{ discRight }}">
+          <span style="{{ discValue }}">{{ formatSummary }}</span>
+          <svg viewBox="0 0 24 24" fill="none" style="{{ discChevron }}" aria-hidden="true"><path d="M6 9l6 6 6-6" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"></path></svg>
+        </span>
+      </button>
+      <sc-if value="{{ formatOpen }}" hint-placeholder-val="">
+        <div style="{{ discBody }}">
+          <dc-import name="LLRadioGroup" value="{{ formatValue }}" name="ll-format" options="{{ formatOptions }}" on-change="{{ onFormatChange }}" hint-size="100%,110px"></dc-import>
+        </div>
+      </sc-if>
+    </div>
+  </div>
+
+  <div style="{{ footerStyle }}">
+    <dc-import name="LLButton" label="{{ startLabel }}" variant="primary" size="lg" full-width="{{ true }}" disabled="{{ startDisabled }}" loading="{{ loading }}" on-click="{{ onStart }}" hint-size="100%,54px"></dc-import>
+  </div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{&quot;$preview&quot;:{&quot;width&quot;:420,&quot;height&quot;:720},&quot;query&quot;:{&quot;editor&quot;:&quot;text&quot;,&quot;default&quot;:&quot;computational neuroscience spiking neural networks&quot;,&quot;tsType&quot;:&quot;string&quot;},&quot;settings&quot;:{&quot;editor&quot;:null,&quot;default&quot;:{&quot;sort&quot;:&quot;relevance&quot;,&quot;fields&quot;:{&quot;lastAuthor&quot;:true,&quot;allAuthors&quot;:false,&quot;journal&quot;:true,&quot;pubDate&quot;:true},&quot;defaultBehavior&quot;:&quot;notInterested&quot;,&quot;speed&quot;:1.1,&quot;format&quot;:&quot;audiobook&quot;},&quot;tsType&quot;:&quot;LLSettings&quot;},&quot;loading&quot;:{&quot;editor&quot;:&quot;boolean&quot;,&quot;default&quot;:false,&quot;tsType&quot;:&quot;boolean&quot;},&quot;resultCount&quot;:{&quot;editor&quot;:&quot;int&quot;,&quot;default&quot;:248,&quot;tsType&quot;:&quot;number&quot;},&quot;onChange&quot;:{&quot;editor&quot;:null,&quot;tsType&quot;:&quot;(settings: LLSettings) =&gt; void&quot;},&quot;onQueryChange&quot;:{&quot;editor&quot;:null,&quot;tsType&quot;:&quot;(query: string) =&gt; void&quot;},&quot;onStart&quot;:{&quot;editor&quot;:null,&quot;tsType&quot;:&quot;() =&gt; void&quot;},&quot;onClose&quot;:{&quot;editor&quot;:null,&quot;tsType&quot;:&quot;() =&gt; void&quot;}}">
+class Component extends DCLogic {
+  state = { formatOpen: false };
+  patch(next) { this.props.onChange && this.props.onChange({ ...this.settings(), ...next }); }
+  settings() {
+    const s = this.props.settings || {};
+    return {
+      sort: s.sort || 'relevance',
+      fields: s.fields || { lastAuthor: true, allAuthors: false, journal: true, pubDate: true },
+      defaultBehavior: s.defaultBehavior || 'notInterested',
+      speed: s.speed ?? 1.1,
+      format: s.format || 'audiobook',
+    };
+  }
+  renderVals() {
+    const p = this.props;
+    const font = "Tahoma, Verdana, Geneva, 'DejaVu Sans', sans-serif";
+    const s = this.settings();
+    const fieldDefs = [
+      { key: 'lastAuthor', label: 'Last author' },
+      { key: 'allAuthors', label: 'All authors' },
+      { key: 'journal', label: 'Journal' },
+      { key: 'pubDate', label: 'Publication date' },
+    ];
+    const fieldItems = fieldDefs.map((f) => ({
+      label: f.label,
+      checked: !!s.fields[f.key],
+      onChange: (checked) => this.patch({ fields: { ...s.fields, [f.key]: checked } }),
+    }));
+    const query = p.query || '';
+    const rc = p.resultCount;
+    return {
+      query,
+      loading: !!p.loading,
+      onClose: p.onClose,
+      onQueryChange: (v) => p.onQueryChange && p.onQueryChange(v),
+      onStart: () => { if (!(!query.trim() || p.loading)) p.onStart && p.onStart(); },
+      startLabel: 'Start  ▶',
+      startDisabled: !query.trim(),
+      showCount: !p.loading && typeof rc === 'number' && query.trim().length > 0,
+      resultCountLabel: (rc || 0).toLocaleString() + ' results on PubMed',
+      sortValue: s.sort,
+      sortOptions: [
+        { value: 'relevance', label: 'Relevance' },
+        { value: 'recency', label: 'Recency' },
+        { value: 'citations', label: 'Citation count' },
+      ],
+      onSortChange: (v) => this.patch({ sort: v }),
+      fieldItems,
+      defaultValue: s.defaultBehavior,
+      defaultOptions: [
+        { value: 'interested', label: 'Mark Interested' },
+        { value: 'notInterested', label: 'Mark Not Interested' },
+      ],
+      onDefaultChange: (v) => this.patch({ defaultBehavior: v }),
+      speed: s.speed,
+      onSpeedChange: (v) => this.patch({ speed: v }),
+      formatValue: s.format,
+      formatOptions: [
+        { value: 'audiobook', label: 'Audiobook (TTS)' },
+        { value: 'podcast', label: 'Podcast', hint: 'Coming later', disabled: true },
+      ],
+      onFormatChange: (v) => this.patch({ format: v }),
+      formatOpen: this.state.formatOpen,
+      formatSummary: s.format === 'podcast' ? 'Podcast' : 'Audiobook (TTS)',
+      toggleFormat: () => this.setState(st => ({ formatOpen: !st.formatOpen })),
+      discBtn: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '12px', width: '100%', boxSizing: 'border-box', background: 'transparent', border: 'none', padding: '2px 0', cursor: 'pointer', fontFamily: font },
+      discHover: {},
+      discRight: { display: 'inline-flex', alignItems: 'center', gap: '8px' },
+      discValue: { font: `500 14px/1 ${font}`, color: '#1A1A1A' },
+      discChevron: { width: '18px', height: '18px', color: '#B3B3B3', flex: 'none', transform: this.state.formatOpen ? 'rotate(180deg)' : 'none', transition: 'transform .2s' },
+      discBody: { paddingTop: '10px' },
+      panelStyle: { display: 'flex', flexDirection: 'column', width: '100%', height: '100%', boxSizing: 'border-box', background: '#fff', fontFamily: font },
+      grabHandle: { width: '40px', height: '4px', borderRadius: '999px', background: '#E0E0DC', margin: '10px auto 4px' },
+      headerStyle: { display: 'flex', alignItems: 'center', gap: '12px', padding: '8px 20px 14px', borderBottom: '1px solid #F2F2F2' },
+      closeStyle: { flex: 'none', width: '34px', height: '34px', borderRadius: '50%', border: '1px solid #EDEDEA', background: '#fff', color: '#595959', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', transition: 'background .15s' },
+      closeHover: { background: '#F2F2F2' },
+      closeIcon: { width: '16px', height: '16px' },
+      headTitle: { flex: 1, font: `600 16px/1 ${font}`, color: '#1A1A1A' },
+      swipeHint: { font: `500 12px/1 ${font}`, color: '#B3B3B3', letterSpacing: '.02em' },
+      bodyStyle: { flex: 1, overflowY: 'auto', padding: '18px 20px 8px', display: 'flex', flexDirection: 'column' },
+      searchRow: { marginBottom: '6px' },
+      countStyle: { font: `400 12px/1 ${font}`, color: '#595959', padding: '8px 4px 0' },
+      section: { padding: '16px 0', borderBottom: '1px solid #F2F2F2' },
+      groupLabel: { display: 'block', font: `600 13px/1 ${font}`, color: '#595959', letterSpacing: '.03em', textTransform: 'uppercase', marginBottom: '4px' },
+      fieldsWrap: { display: 'flex', flexDirection: 'column', gap: '0' },
+      footerStyle: { padding: '16px 20px', borderTop: '1px solid #F2F2F2', background: '#fff' },
+    };
+  }
+}
+</script>
+</body>
+</html>

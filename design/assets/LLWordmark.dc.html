@@ -1,0 +1,43 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<div style="{{ wrapStyle }}" aria-label="LitList">
+  <sc-if value="{{ showGlyph }}" hint-placeholder-val="{{ true }}">
+    <svg viewBox="0 0 24 24" fill="none" style="{{ glyphStyle }}" aria-hidden="true">
+      <rect x="3.5" y="5.5" width="14" height="10.5" rx="2.5" stroke="{{ inkColor }}" stroke-width="1.75"></rect>
+      <rect x="6.5" y="8.5" width="14" height="10.5" rx="2.5" fill="#FFFFFF" stroke="{{ inkColor }}" stroke-width="1.75"></rect>
+      <path d="M11.4 11.3v5.4l4.4-2.7z" fill="{{ accentColor }}"></path>
+    </svg>
+  </sc-if>
+  <span style="{{ textStyle }}"><span style="{{ litStyle }}">Lit</span><span style="{{ listStyle }}">List</span></span>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{&quot;$preview&quot;:{&quot;width&quot;:260,&quot;height&quot;:80},&quot;size&quot;:{&quot;editor&quot;:&quot;range&quot;,&quot;default&quot;:28,&quot;min&quot;:16,&quot;max&quot;:72,&quot;unit&quot;:&quot;px&quot;,&quot;tsType&quot;:&quot;number&quot;},&quot;showGlyph&quot;:{&quot;editor&quot;:&quot;boolean&quot;,&quot;default&quot;:true,&quot;tsType&quot;:&quot;boolean&quot;},&quot;accentColor&quot;:{&quot;editor&quot;:&quot;color&quot;,&quot;default&quot;:&quot;#F05A22&quot;,&quot;options&quot;:[&quot;#F05A22&quot;,&quot;#F9A51A&quot;,&quot;#009995&quot;],&quot;tsType&quot;:&quot;string&quot;},&quot;inkColor&quot;:{&quot;editor&quot;:&quot;color&quot;,&quot;default&quot;:&quot;#1A1A1A&quot;,&quot;options&quot;:[&quot;#1A1A1A&quot;,&quot;#FFFFFF&quot;,&quot;#595959&quot;],&quot;tsType&quot;:&quot;string&quot;}}">
+class Component extends DCLogic {
+  renderVals() {
+    const p = this.props;
+    const font = "Tahoma, Verdana, Geneva, 'DejaVu Sans', sans-serif";
+    const size = Number(p.size) || 28;
+    const accent = p.accentColor || '#F05A22';
+    const ink = p.inkColor || '#1A1A1A';
+    return {
+      showGlyph: p.showGlyph !== false,
+      inkColor: ink,
+      accentColor: accent,
+      wrapStyle: { display: 'inline-flex', alignItems: 'center', gap: (size * 0.34) + 'px', fontFamily: font },
+      glyphStyle: { width: (size * 1.1) + 'px', height: (size * 1.1) + 'px', display: 'block', flex: 'none' },
+      textStyle: { fontFamily: font, fontSize: size + 'px', lineHeight: 1, letterSpacing: '-.01em', display: 'inline-flex' },
+      litStyle: { fontWeight: 700, color: ink },
+      listStyle: { fontWeight: 400, color: ink },
+    };
+  }
+}
+</script>
+</body>
+</html>

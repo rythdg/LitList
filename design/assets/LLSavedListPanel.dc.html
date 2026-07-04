@@ -1,0 +1,91 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<div style="{{ panelStyle }}">
+  <div style="{{ grabHandle }}"></div>
+  <div style="{{ headerStyle }}">
+    <span style="{{ headTitle }}">Saved this session <span style="{{ countBadge }}">{{ count }}</span></span>
+    <button type="button" onClick="{{ onClose }}" aria-label="Collapse saved list" style="{{ closeStyle }}" style-hover="{{ closeHover }}">
+      <svg viewBox="0 0 24 24" fill="none" style="{{ closeIcon }}"><path d="M6 9l6 6 6-6" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"></path></svg>
+    </button>
+  </div>
+
+  <div style="{{ bodyStyle }}">
+    <sc-if value="{{ hasPapers }}" hint-placeholder-val="{{ true }}">
+      <div style="{{ listStyle }}">
+        <sc-for list="{{ items }}" as="item" hint-placeholder-count="3">
+          <dc-import name="LLSavedPaperItem" title="{{ item.title }}" meta="{{ item.meta }}" on-remove="{{ item.onRemove }}" hint-size="100%,68px"></dc-import>
+        </sc-for>
+      </div>
+    </sc-if>
+    <sc-if value="{{ isEmpty }}" hint-placeholder-val="">
+      <dc-import name="LLEmptyState" variant="nothing-saved" title="Nothing saved yet" message="Papers you mark Interested will show up here." hint-size="100%,220px"></dc-import>
+    </sc-if>
+  </div>
+
+  <div style="{{ footerStyle }}">
+    <div style="{{ exportRow }}">
+      <dc-import name="LLButton" label="Push to Zotero" variant="primary" full-width="{{ true }}" disabled="{{ exportDisabled }}" on-click="{{ onPushZotero }}" hint-size="100%,48px"></dc-import>
+      <dc-import name="LLButton" label="Download CSV" variant="secondary" full-width="{{ true }}" disabled="{{ exportDisabled }}" on-click="{{ onDownloadCsv }}" hint-size="100%,48px"></dc-import>
+    </div>
+    <sc-if value="{{ connected }}" hint-placeholder-val="">
+      <div style="{{ connRow }}">
+        <span style="{{ connText }}"><span style="{{ connDot }}"></span>Connected to Zotero as {{ zoteroUser }}</span>
+        <button type="button" onClick="{{ onDisconnect }}" style="{{ disconnectStyle }}" style-hover="{{ disconnectHover }}">Disconnect</button>
+      </div>
+    </sc-if>
+  </div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{&quot;$preview&quot;:{&quot;width&quot;:420,&quot;height&quot;:560},&quot;papers&quot;:{&quot;editor&quot;:null,&quot;default&quot;:[{&quot;id&quot;:&quot;1&quot;,&quot;title&quot;:&quot;Spiking Neural Networks for Real-Time Neuromorphic Inference&quot;,&quot;meta&quot;:&quot;Smith et al. · 2025&quot;},{&quot;id&quot;:&quot;2&quot;,&quot;title&quot;:&quot;Temporal Coding in Cortical Microcircuits&quot;,&quot;meta&quot;:&quot;Lee et al. · 2024&quot;}],&quot;tsType&quot;:&quot;Array&lt;{id:string,title:string,meta:string}&gt;&quot;},&quot;connected&quot;:{&quot;editor&quot;:&quot;boolean&quot;,&quot;default&quot;:true,&quot;tsType&quot;:&quot;boolean&quot;},&quot;zoteroUser&quot;:{&quot;editor&quot;:&quot;text&quot;,&quot;default&quot;:&quot;you&quot;,&quot;tsType&quot;:&quot;string&quot;},&quot;onRemove&quot;:{&quot;editor&quot;:null,&quot;tsType&quot;:&quot;(id: string) =&gt; void&quot;},&quot;onPushZotero&quot;:{&quot;editor&quot;:null,&quot;tsType&quot;:&quot;() =&gt; void&quot;},&quot;onDownloadCsv&quot;:{&quot;editor&quot;:null,&quot;tsType&quot;:&quot;() =&gt; void&quot;},&quot;onDisconnect&quot;:{&quot;editor&quot;:null,&quot;tsType&quot;:&quot;() =&gt; void&quot;},&quot;onClose&quot;:{&quot;editor&quot;:null,&quot;tsType&quot;:&quot;() =&gt; void&quot;}}">
+class Component extends DCLogic {
+  renderVals() {
+    const p = this.props;
+    const font = "Tahoma, Verdana, Geneva, 'DejaVu Sans', sans-serif";
+    const papers = Array.isArray(p.papers) ? p.papers : [];
+    const items = papers.map((pp) => ({
+      title: pp.title, meta: pp.meta || '',
+      onRemove: () => p.onRemove && p.onRemove(pp.id),
+    }));
+    return {
+      count: papers.length,
+      items,
+      hasPapers: papers.length > 0,
+      isEmpty: papers.length === 0,
+      exportDisabled: papers.length === 0,
+      connected: !!p.connected,
+      zoteroUser: p.zoteroUser || 'you',
+      onClose: p.onClose,
+      onRemove: p.onRemove,
+      onPushZotero: p.onPushZotero,
+      onDownloadCsv: p.onDownloadCsv,
+      onDisconnect: p.onDisconnect,
+      panelStyle: { display: 'flex', flexDirection: 'column', width: '100%', height: '100%', boxSizing: 'border-box', background: '#fff', fontFamily: font },
+      grabHandle: { width: '40px', height: '4px', borderRadius: '999px', background: '#E0E0DC', margin: '10px auto 4px' },
+      headerStyle: { display: 'flex', alignItems: 'center', gap: '12px', padding: '8px 20px 14px', borderBottom: '1px solid #F2F2F2' },
+      headTitle: { flex: 1, font: `600 16px/1 ${font}`, color: '#1A1A1A', display: 'inline-flex', alignItems: 'center', gap: '9px' },
+      countBadge: { font: `700 12px/1 ${font}`, color: '#F05A22', background: '#FDEDE5', padding: '4px 8px', borderRadius: '999px' },
+      closeStyle: { flex: 'none', width: '34px', height: '34px', borderRadius: '50%', border: '1px solid #EDEDEA', background: '#fff', color: '#595959', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', transition: 'background .15s' },
+      closeHover: { background: '#F2F2F2' },
+      closeIcon: { width: '18px', height: '18px' },
+      bodyStyle: { flex: 1, overflowY: 'auto', padding: '4px 20px' },
+      listStyle: { display: 'flex', flexDirection: 'column' },
+      footerStyle: { padding: '16px 20px', borderTop: '1px solid #F2F2F2', display: 'flex', flexDirection: 'column', gap: '14px' },
+      exportRow: { display: 'flex', flexDirection: 'column', gap: '10px' },
+      connRow: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '10px' },
+      connText: { font: `400 13px/1.3 ${font}`, color: '#595959', display: 'inline-flex', alignItems: 'center', gap: '8px' },
+      connDot: { width: '8px', height: '8px', borderRadius: '50%', background: '#6E9A1F', flex: 'none' },
+      disconnectStyle: { border: 'none', background: 'transparent', color: '#AB0C23', cursor: 'pointer', font: `600 13px/1 ${font}`, padding: '4px 2px', flex: 'none' },
+      disconnectHover: { textDecoration: 'underline' },
+    };
+  }
+}
+</script>
+</body>
+</html>

@@ -1,0 +1,60 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<label style="{{ rowStyle }}" style-hover="{{ rowHover }}">
+  <span style="{{ boxStyle }}">
+    <sc-if value="{{ checked }}" hint-placeholder-val="">
+      <svg viewBox="0 0 24 24" fill="none" style="{{ tickStyle }}" aria-hidden="true">
+        <path d="M5 12.5l4.5 4.5L19 7" stroke="#fff" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"></path>
+      </svg>
+    </sc-if>
+  </span>
+  <span style="{{ textWrap }}">
+    <span style="{{ labelStyle }}">{{ label }}</span>
+    <sc-if value="{{ hint }}" hint-placeholder-val="">
+      <span style="{{ hintStyle }}">{{ hint }}</span>
+    </sc-if>
+  </span>
+  <input type="checkbox" checked="{{ checked }}" disabled="{{ disabled }}" onChange="{{ onToggle }}" style="{{ srOnly }}" />
+</label>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{&quot;$preview&quot;:{&quot;width&quot;:280,&quot;height&quot;:64},&quot;label&quot;:{&quot;editor&quot;:&quot;text&quot;,&quot;default&quot;:&quot;Last author&quot;,&quot;tsType&quot;:&quot;string&quot;},&quot;hint&quot;:{&quot;editor&quot;:&quot;text&quot;,&quot;default&quot;:&quot;&quot;,&quot;tsType&quot;:&quot;string&quot;},&quot;checked&quot;:{&quot;editor&quot;:&quot;boolean&quot;,&quot;default&quot;:true,&quot;tsType&quot;:&quot;boolean&quot;},&quot;disabled&quot;:{&quot;editor&quot;:&quot;boolean&quot;,&quot;default&quot;:false,&quot;tsType&quot;:&quot;boolean&quot;},&quot;onChange&quot;:{&quot;editor&quot;:null,&quot;tsType&quot;:&quot;(checked: boolean) =&gt; void&quot;}}">
+class Component extends DCLogic {
+  renderVals() {
+    const p = this.props;
+    const font = "Tahoma, Verdana, Geneva, 'DejaVu Sans', sans-serif";
+    const checked = !!p.checked;
+    const disabled = !!p.disabled;
+    return {
+      label: p.label || 'Option',
+      hint: p.hint || '',
+      checked, disabled,
+      onToggle: disabled ? undefined : (e) => p.onChange && p.onChange(e.target.checked),
+      rowStyle: {
+        display: 'flex', alignItems: 'flex-start', gap: '11px', padding: '9px 10px', borderRadius: '8px',
+        cursor: disabled ? 'not-allowed' : 'pointer', opacity: disabled ? 0.45 : 1, transition: 'background .12s',
+        position: 'relative', fontFamily: font,
+      },
+      rowHover: disabled ? {} : { background: '#F7F7F5' },
+      boxStyle: {
+        flex: 'none', width: '20px', height: '20px', marginTop: '1px', borderRadius: '5px',
+        border: `1.75px solid ${checked ? '#F05A22' : '#B3B3B3'}`, background: checked ? '#F05A22' : '#fff',
+        display: 'inline-flex', alignItems: 'center', justifyContent: 'center', transition: 'background .15s, border-color .15s',
+      },
+      tickStyle: { width: '15px', height: '15px' },
+      textWrap: { display: 'flex', flexDirection: 'column', gap: '2px' },
+      labelStyle: { font: `400 15px/1.25 ${font}`, color: '#1A1A1A' },
+      hintStyle: { font: `400 12px/1.3 ${font}`, color: '#595959' },
+      srOnly: { position: 'absolute', opacity: 0, width: '1px', height: '1px', pointerEvents: 'none' },
+    };
+  }
+}
+</script>
+</body>
+</html>

@@ -1,0 +1,60 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<div style="{{ toastStyle }}" role="status" aria-live="polite">
+  <span style="{{ iconWrap }}">
+    <sc-if value="{{ isSuccess }}" hint-placeholder-val="">
+      <svg viewBox="0 0 24 24" fill="none" style="{{ iconStyle }}"><path d="M20 6L9 17l-5-5" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"></path></svg>
+    </sc-if>
+    <sc-if value="{{ isError }}" hint-placeholder-val="">
+      <svg viewBox="0 0 24 24" fill="none" style="{{ iconStyle }}"><path d="M12 8v5M12 16.5v.5" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"></path><path d="M10.3 3.9L2.5 18a2 2 0 001.7 3h15.6a2 2 0 001.7-3L13.7 3.9a2 2 0 00-3.4 0z" stroke="currentColor" stroke-width="1.75" stroke-linejoin="round"></path></svg>
+    </sc-if>
+    <sc-if value="{{ isInfo }}" hint-placeholder-val="{{ true }}">
+      <svg viewBox="0 0 24 24" fill="none" style="{{ iconStyle }}"><circle cx="12" cy="12" r="9" stroke="currentColor" stroke-width="1.75"></circle><path d="M12 11v5M12 7.5v.5" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"></path></svg>
+    </sc-if>
+  </span>
+  <span style="{{ msgStyle }}">{{ message }}</span>
+  <sc-if value="{{ actionLabel }}" hint-placeholder-val="">
+    <button type="button" onClick="{{ onAction }}" style="{{ actionStyle }}" style-hover="{{ actionHover }}">{{ actionLabel }}</button>
+  </sc-if>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{&quot;$preview&quot;:{&quot;width&quot;:400,&quot;height&quot;:80},&quot;message&quot;:{&quot;editor&quot;:&quot;text&quot;,&quot;default&quot;:&quot;Nothing saved yet.&quot;,&quot;tsType&quot;:&quot;string&quot;},&quot;variant&quot;:{&quot;editor&quot;:&quot;enum&quot;,&quot;default&quot;:&quot;info&quot;,&quot;options&quot;:[&quot;info&quot;,&quot;success&quot;,&quot;error&quot;],&quot;tsType&quot;:&quot;'info'|'success'|'error'&quot;},&quot;actionLabel&quot;:{&quot;editor&quot;:&quot;text&quot;,&quot;default&quot;:&quot;&quot;,&quot;tsType&quot;:&quot;string&quot;},&quot;onAction&quot;:{&quot;editor&quot;:null,&quot;tsType&quot;:&quot;() =&gt; void&quot;}}">
+class Component extends DCLogic {
+  renderVals() {
+    const p = this.props;
+    const font = "Tahoma, Verdana, Geneva, 'DejaVu Sans', sans-serif";
+    const variant = p.variant || 'info';
+    const tint = { info: '#1A1A1A', success: '#6E9A1F', error: '#AB0C23' }[variant] || '#1A1A1A';
+    return {
+      message: p.message || 'Nothing saved yet.',
+      actionLabel: p.actionLabel || '',
+      onAction: p.onAction,
+      isSuccess: variant === 'success',
+      isError: variant === 'error',
+      isInfo: variant === 'info',
+      toastStyle: {
+        display: 'inline-flex', alignItems: 'center', gap: '11px', maxWidth: '380px',
+        padding: '13px 16px', background: '#1A1A1A', color: '#fff', borderRadius: '10px',
+        boxShadow: '0 8px 24px rgba(26,26,26,.22)', font: `400 14px/1.35 ${font}`,
+      },
+      iconWrap: { display: 'inline-flex', flex: 'none', color: variant === 'info' ? '#fff' : tint },
+      iconStyle: { width: '20px', height: '20px' },
+      msgStyle: { flex: 1 },
+      actionStyle: {
+        flex: 'none', border: 'none', background: 'transparent', color: '#F9A51A', cursor: 'pointer',
+        font: `600 14px/1 ${font}`, padding: '4px 2px',
+      },
+      actionHover: { color: '#F05A22' },
+    };
+  }
+}
+</script>
+</body>
+</html>

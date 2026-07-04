@@ -1,0 +1,49 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet><style>@keyframes ll-aff-bob { 0%,100%{transform:translateY(0);opacity:.55} 50%{transform:translateY(var(--ll-bob));opacity:1} }</style></helmet>
+<button type="button" onClick="{{ onClick }}" disabled="{{ disabled }}" aria-label="{{ label }}" style="{{ wrapStyle }}" style-hover="{{ hoverStyle }}">
+  <sc-if value="{{ pointsUp }}" hint-placeholder-val="">
+    <svg viewBox="0 0 24 24" fill="none" style="{{ chevStyle }}" aria-hidden="true"><path d="M6 15l6-6 6 6" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"></path></svg>
+  </sc-if>
+  <span style="{{ labelStyle }}">{{ label }}</span>
+  <sc-if value="{{ pointsDown }}" hint-placeholder-val="{{ true }}">
+    <svg viewBox="0 0 24 24" fill="none" style="{{ chevStyle }}" aria-hidden="true"><path d="M6 9l6 6 6-6" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"></path></svg>
+  </sc-if>
+</button>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{&quot;$preview&quot;:{&quot;width&quot;:260,&quot;height&quot;:56},&quot;direction&quot;:{&quot;editor&quot;:&quot;enum&quot;,&quot;default&quot;:&quot;down&quot;,&quot;options&quot;:[&quot;up&quot;,&quot;down&quot;],&quot;tsType&quot;:&quot;'up'|'down'&quot;},&quot;label&quot;:{&quot;editor&quot;:&quot;text&quot;,&quot;default&quot;:&quot;Swipe down to search&quot;,&quot;tsType&quot;:&quot;string&quot;},&quot;disabled&quot;:{&quot;editor&quot;:&quot;boolean&quot;,&quot;default&quot;:false,&quot;tsType&quot;:&quot;boolean&quot;},&quot;onClick&quot;:{&quot;editor&quot;:null,&quot;tsType&quot;:&quot;() =&gt; void&quot;}}">
+class Component extends DCLogic {
+  renderVals() {
+    const p = this.props;
+    const font = "Tahoma, Verdana, Geneva, 'DejaVu Sans', sans-serif";
+    const dir = p.direction || 'down';
+    const disabled = !!p.disabled;
+    return {
+      label: p.label || (dir === 'down' ? 'Swipe down to search' : 'Swipe up for saved list'),
+      pointsUp: dir === 'up',
+      pointsDown: dir === 'down',
+      disabled,
+      onClick: disabled ? undefined : p.onClick,
+      wrapStyle: {
+        '--ll-bob': dir === 'down' ? '3px' : '-3px',
+        display: 'inline-flex', alignItems: 'center', gap: '7px', border: 'none', background: 'transparent',
+        cursor: disabled ? 'default' : 'pointer', padding: '6px 10px', borderRadius: '999px',
+        color: disabled ? '#C9C9C6' : '#B3B3B3', font: `500 12.5px/1 ${font}`, letterSpacing: '.02em',
+        animation: disabled ? 'none' : 'll-aff-bob 2.4s ease-in-out infinite', transition: 'color .15s',
+      },
+      hoverStyle: disabled ? {} : { color: '#595959' },
+      chevStyle: { width: '16px', height: '16px', flex: 'none' },
+      labelStyle: { whiteSpace: 'nowrap' },
+    };
+  }
+}
+</script>
+</body>
+</html>

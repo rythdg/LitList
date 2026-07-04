@@ -1,0 +1,126 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<div style="{{ cardStyle }}" onPointerDown="{{ onDown }}" onPointerMove="{{ onMove }}" onPointerUp="{{ onUp }}" onPointerCancel="{{ onUp }}" aria-label="Paper card">
+  <div style="{{ overlayInt }}">
+    <span style="{{ badgeInt }}">
+      <svg viewBox="0 0 24 24" fill="none" style="{{ badgeIcon }}"><path d="M20 6L9 17l-5-5" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"></path></svg>
+      Interested
+    </span>
+  </div>
+  <div style="{{ overlaySkip }}">
+    <span style="{{ badgeSkip }}">
+      <svg viewBox="0 0 24 24" fill="none" style="{{ badgeIcon }}"><path d="M6.5 6.5l11 11M17.5 6.5l-11 11" stroke="currentColor" stroke-width="2.6" stroke-linecap="round"></path></svg>
+      Skip
+    </span>
+  </div>
+  <div style="{{ innerStyle }}">
+    <h2 style="{{ titleStyle }}">{{ title }}</h2>
+    <div style="{{ metaStyle }}">{{ metaLine }}</div>
+    <div style="{{ abstractWrap }}">
+      <dc-import name="LLAbstractReader" sentences="{{ sentences }}" current-index="{{ currentIndex }}" active="{{ active }}" idle-text="{{ idleText }}" font-size="{{ abstractFontSize }}" hint-size="100%,120px"></dc-import>
+    </div>
+  </div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{&quot;$preview&quot;:{&quot;width&quot;:440,&quot;height&quot;:360},&quot;title&quot;:{&quot;editor&quot;:&quot;text&quot;,&quot;default&quot;:&quot;Spiking Neural Networks for Real-Time Neuromorphic Inference&quot;,&quot;tsType&quot;:&quot;string&quot;},&quot;metaLine&quot;:{&quot;editor&quot;:&quot;text&quot;,&quot;default&quot;:&quot;Smith et al. · Nature Neuroscience · 2025&quot;,&quot;tsType&quot;:&quot;string&quot;},&quot;sentences&quot;:{&quot;editor&quot;:null,&quot;default&quot;:[&quot;Efficient spike-based encoding remains a central challenge for neuromorphic systems.&quot;,&quot;We present a temporal coding scheme that reduces spike count by forty percent.&quot;,&quot;Across three benchmark tasks, accuracy was preserved within one percent of dense baselines.&quot;],&quot;tsType&quot;:&quot;string[]&quot;},&quot;currentIndex&quot;:{&quot;editor&quot;:&quot;int&quot;,&quot;default&quot;:0,&quot;tsType&quot;:&quot;number&quot;},&quot;active&quot;:{&quot;editor&quot;:&quot;boolean&quot;,&quot;default&quot;:true,&quot;tsType&quot;:&quot;boolean&quot;},&quot;draggable&quot;:{&quot;editor&quot;:&quot;boolean&quot;,&quot;default&quot;:true,&quot;tsType&quot;:&quot;boolean&quot;},&quot;fill&quot;:{&quot;editor&quot;:&quot;boolean&quot;,&quot;default&quot;:false,&quot;tsType&quot;:&quot;boolean&quot;},&quot;abstractFontSize&quot;:{&quot;editor&quot;:&quot;int&quot;,&quot;default&quot;:0,&quot;tsType&quot;:&quot;number&quot;},&quot;abstractPadBottom&quot;:{&quot;editor&quot;:&quot;int&quot;,&quot;default&quot;:0,&quot;tsType&quot;:&quot;number&quot;},&quot;idleText&quot;:{&quot;editor&quot;:&quot;text&quot;,&quot;default&quot;:&quot;Press play to hear the abstract&quot;,&quot;tsType&quot;:&quot;string&quot;},&quot;onDecide&quot;:{&quot;editor&quot;:null,&quot;tsType&quot;:&quot;(dir: 'interested'|'skip') =&gt; void&quot;},&quot;decideSignal&quot;:{&quot;editor&quot;:null,&quot;tsType&quot;:&quot;{dir:'interested'|'skip',nonce:number}|null&quot;}}">
+class Component extends DCLogic {
+  state = { dragX: 0, dragging: false, exiting: null };
+
+  componentDidUpdate(prev) {
+    if (prev.title !== this.props.title && this.state.exiting) {
+      this._committed = false;
+      this.setState({ dragX: 0, dragging: false, exiting: null });
+    }
+    const sig = this.props.decideSignal, psig = prev.decideSignal;
+    if (sig && sig.nonce !== (psig && psig.nonce)) this.commit(sig.dir);
+  }
+
+  commit(dir) {
+    if (this._committed || !this.props.draggable && !this.props.decideSignal) { /* still allow programmatic */ }
+    if (this.state.exiting) return;
+    this.setState({ exiting: dir, dragging: false });
+    if (this._committed) return;
+    this._committed = true;
+    setTimeout(() => { this.props.onDecide && this.props.onDecide(dir); this._committed = false; }, 300);
+  }
+
+  onDown = (e) => {
+    if (this.state.exiting || this.props.draggable === false) return;
+    this._startX = e.clientX; this._startY = e.clientY; this._axis = null;
+    try { e.currentTarget.setPointerCapture(e.pointerId); } catch (_) {}
+    this.setState({ dragging: true });
+  };
+  onMove = (e) => {
+    if (!this.state.dragging) return;
+    const dx = e.clientX - this._startX, dy = e.clientY - this._startY;
+    if (this._axis === null && (Math.abs(dx) > 6 || Math.abs(dy) > 6)) this._axis = Math.abs(dx) > Math.abs(dy) ? 'x' : 'y';
+    if (this._axis === 'x') this.setState({ dragX: dx });
+  };
+  onUp = () => {
+    if (!this.state.dragging) return;
+    const dx = this.state.dragX, t = 110;
+    this.setState({ dragging: false });
+    if (dx > t) this.commit('interested');
+    else if (dx < -t) this.commit('skip');
+    else this.setState({ dragX: 0 });
+  };
+
+  renderVals() {
+    const p = this.props;
+    const font = "Tahoma, Verdana, Geneva, 'DejaVu Sans', sans-serif";
+    const { dragX, dragging, exiting } = this.state;
+    let transform, opacity = 1;
+    if (exiting === 'interested') { transform = 'translateX(135%) rotate(10deg)'; opacity = 0; }
+    else if (exiting === 'skip') { transform = 'translateX(-135%) rotate(-10deg)'; opacity = 0; }
+    else { transform = `translateX(${dragX}px) rotate(${dragX * 0.035}deg)`; }
+    const prog = Math.max(0, Math.min(1, Math.abs(dragX) / 110));
+    const intOp = exiting === 'interested' ? 1 : (dragX > 0 ? prog : 0);
+    const skipOp = exiting === 'skip' ? 1 : (dragX < 0 ? prog : 0);
+    const fill = !!p.fill;
+    const padB = p.abstractPadBottom || 0;
+    return {
+      title: p.title || 'Untitled', metaLine: p.metaLine || '',
+      sentences: Array.isArray(p.sentences) ? p.sentences : [],
+      currentIndex: p.currentIndex ?? -1, active: !!p.active,
+      idleText: p.idleText || 'Press play to hear the abstract',
+      abstractFontSize: p.abstractFontSize || (fill ? 18 : 17),
+      onDown: this.onDown, onMove: this.onMove, onUp: this.onUp,
+      cardStyle: {
+        position: 'relative', boxSizing: 'border-box', width: '100%', background: '#fff',
+        height: fill ? '100%' : 'auto', display: fill ? 'flex' : 'block', flexDirection: 'column',
+        border: '1px solid #E7E7E4', borderRadius: '16px', boxShadow: '0 2px 6px rgba(26,26,26,.06), 0 12px 30px rgba(26,26,26,.07)',
+        transform, opacity, touchAction: 'pan-y', cursor: dragging ? 'grabbing' : 'grab', userSelect: 'none',
+        transition: dragging ? 'none' : 'transform .3s cubic-bezier(.4,0,.2,1), opacity .3s', overflow: 'hidden', fontFamily: font,
+      },
+      innerStyle: fill
+        ? { padding: '24px 26px 0', display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0 }
+        : { padding: '26px 26px 28px' },
+      titleStyle: { font: `700 ${fill ? 26 : 24}px/1.22 ${font}`, color: '#1A1A1A', margin: '0 0 12px', letterSpacing: '-.01em', textWrap: 'pretty', flex: 'none' },
+      metaStyle: { font: `600 14px/1.4 ${font}`, color: '#F05A22', marginBottom: fill ? '16px' : '20px', flex: 'none' },
+      abstractWrap: fill
+        ? { borderTop: '1px solid #F2F2F2', paddingTop: '16px', paddingBottom: padB + 'px', flex: 1, minHeight: 0, overflowY: 'auto' }
+        : { borderTop: '1px solid #F2F2F2', paddingTop: '18px' },
+      overlayInt: {
+        position: 'absolute', inset: 0, background: 'rgba(110,154,31,.10)', display: 'flex', alignItems: 'flex-start',
+        justifyContent: 'flex-start', padding: '24px', opacity: intOp, pointerEvents: 'none', transition: exiting ? 'opacity .2s' : 'none', zIndex: 2,
+      },
+      overlaySkip: {
+        position: 'absolute', inset: 0, background: 'rgba(89,89,89,.10)', display: 'flex', alignItems: 'flex-start',
+        justifyContent: 'flex-end', padding: '24px', opacity: skipOp, pointerEvents: 'none', transition: exiting ? 'opacity .2s' : 'none', zIndex: 2,
+      },
+      badgeInt: { display: 'inline-flex', alignItems: 'center', gap: '8px', padding: '9px 16px', border: '2px solid #6E9A1F', color: '#6E9A1F', borderRadius: '10px', font: `700 16px/1 ${font}`, background: 'rgba(255,255,255,.85)', transform: 'rotate(-8deg)' },
+      badgeSkip: { display: 'inline-flex', alignItems: 'center', gap: '8px', padding: '9px 16px', border: '2px solid #595959', color: '#595959', borderRadius: '10px', font: `700 16px/1 ${font}`, background: 'rgba(255,255,255,.85)', transform: 'rotate(8deg)' },
+      badgeIcon: { width: '18px', height: '18px' },
+    };
+  }
+}
+</script>
+</body>
+</html>

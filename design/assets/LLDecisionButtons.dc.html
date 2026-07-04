@@ -1,0 +1,69 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<div style="{{ wrapStyle }}" role="group" aria-label="Decide on this paper">
+  <sc-if value="{{ showSkip }}" hint-placeholder-val="{{ true }}">
+    <button type="button" onClick="{{ onSkip }}" disabled="{{ disabled }}" aria-label="Skip — not interested" style="{{ btnStyle }}" style-active="{{ pressStyle }}">
+      <span style="{{ skipDisc }}" style-hover="{{ skipDiscHover }}">
+        <svg viewBox="0 0 24 24" fill="none" style="{{ iconStyle }}" aria-hidden="true"><path d="M6.5 6.5l11 11M17.5 6.5l-11 11" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"></path></svg>
+      </span>
+      <sc-if value="{{ showLabels }}" hint-placeholder-val=""><span style="{{ skipLabelStyle }}">Skip</span></sc-if>
+    </button>
+  </sc-if>
+  <sc-if value="{{ showInt }}" hint-placeholder-val="{{ true }}">
+    <button type="button" onClick="{{ onInterested }}" disabled="{{ disabled }}" aria-label="Interested — save paper" style="{{ btnStyle }}" style-active="{{ pressStyle }}">
+      <span style="{{ intDisc }}" style-hover="{{ intDiscHover }}">
+        <svg viewBox="0 0 24 24" fill="none" style="{{ iconStyle }}" aria-hidden="true"><path d="M12 20.5s-7-4.2-9-8.3C1.5 8.7 3.3 5 6.8 5c2 0 3.7 1.1 4.7 2.6l.5.7.5-.7C13.5 6.1 15.2 5 17.2 5c3.5 0 5.3 3.7 3.8 7.2-2 4.1-9 8.3-9 8.3z" fill="currentColor"></path></svg>
+      </span>
+      <sc-if value="{{ showLabels }}" hint-placeholder-val=""><span style="{{ intLabelStyle }}">Interested</span></sc-if>
+    </button>
+  </sc-if>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{&quot;$preview&quot;:{&quot;width&quot;:260,&quot;height&quot;:110},&quot;disabled&quot;:{&quot;editor&quot;:&quot;boolean&quot;,&quot;default&quot;:false,&quot;tsType&quot;:&quot;boolean&quot;},&quot;showLabels&quot;:{&quot;editor&quot;:&quot;boolean&quot;,&quot;default&quot;:true,&quot;tsType&quot;:&quot;boolean&quot;},&quot;only&quot;:{&quot;editor&quot;:&quot;enum&quot;,&quot;default&quot;:&quot;&quot;,&quot;options&quot;:[&quot;&quot;,&quot;skip&quot;,&quot;interested&quot;],&quot;tsType&quot;:&quot;''|'skip'|'interested'&quot;},&quot;gap&quot;:{&quot;editor&quot;:&quot;int&quot;,&quot;default&quot;:40,&quot;tsType&quot;:&quot;number&quot;},&quot;size&quot;:{&quot;editor&quot;:&quot;range&quot;,&quot;default&quot;:56,&quot;min&quot;:40,&quot;max&quot;:80,&quot;unit&quot;:&quot;px&quot;,&quot;tsType&quot;:&quot;number&quot;},&quot;onSkip&quot;:{&quot;editor&quot;:null,&quot;tsType&quot;:&quot;() =&gt; void&quot;},&quot;onInterested&quot;:{&quot;editor&quot;:null,&quot;tsType&quot;:&quot;() =&gt; void&quot;}}">
+class Component extends DCLogic {
+  renderVals() {
+    const p = this.props;
+    const font = "Tahoma, Verdana, Geneva, 'DejaVu Sans', sans-serif";
+    const disabled = !!p.disabled;
+    const size = Number(p.size) || 56;
+    const showLabels = p.showLabels !== false;
+    const only = p.only || null;
+    const gap = p.gap != null ? p.gap : 40;
+    const btnStyle = {
+      display: 'inline-flex', flexDirection: 'column', alignItems: 'center', gap: '7px',
+      border: 'none', background: 'transparent', cursor: disabled ? 'not-allowed' : 'pointer',
+      opacity: disabled ? 0.4 : 1, padding: 0, transition: 'transform .1s', fontFamily: font,
+    };
+    const disc = (fg, bd, bg) => ({
+      width: size + 'px', height: size + 'px', borderRadius: '50%', border: `1.75px solid ${bd}`,
+      background: bg, color: fg, display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+      transition: 'background .15s, border-color .15s, transform .1s',
+    });
+    return {
+      disabled, showLabels, btnStyle,
+      showSkip: only !== 'interested',
+      showInt: only !== 'skip',
+      onSkip: disabled ? undefined : p.onSkip,
+      onInterested: disabled ? undefined : p.onInterested,
+      wrapStyle: { display: 'flex', alignItems: 'flex-start', justifyContent: 'center', gap: gap + 'px', fontFamily: font },
+      pressStyle: disabled ? {} : { transform: 'scale(.94)' },
+      iconStyle: { width: size * 0.42 + 'px', height: size * 0.42 + 'px' },
+      skipDisc: disc('#595959', '#D9D9D9', '#fff'),
+      skipDiscHover: disabled ? {} : { background: '#F2F2F2', borderColor: '#B3B3B3' },
+      intDisc: disc('#6E9A1F', '#CBDDA0', '#F4F8EA'),
+      intDiscHover: disabled ? {} : { background: '#EAF2D9', borderColor: '#A9C46E' },
+      skipLabelStyle: { font: `600 12px/1 ${font}`, color: '#595959', letterSpacing: '.02em' },
+      intLabelStyle: { font: `600 12px/1 ${font}`, color: '#6E9A1F', letterSpacing: '.02em' },
+    };
+  }
+}
+</script>
+</body>
+</html>

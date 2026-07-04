@@ -1,0 +1,490 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<style>
+  html,body{margin:0;padding:0}
+  body{font-family:Tahoma,Verdana,Geneva,'DejaVu Sans',sans-serif;background:#EEEEEB;-webkit-font-smoothing:antialiased}
+  *{-webkit-tap-highlight-color:transparent}
+  @keyframes ll-breathe{0%,100%{opacity:.6;transform:translateY(0)}50%{opacity:1;transform:translateY(-3px)}}
+  @keyframes ll-pulse-ring{0%{box-shadow:0 0 0 0 rgba(240,90,34,.35)}100%{box-shadow:0 0 0 22px rgba(240,90,34,0)}}
+</style>
+</helmet>
+<div style="{{ shellStyle }}">
+  <div style="{{ appStyle }}" data-screen-label="LitList app">
+
+    <!-- STACK SCREEN -->
+    <div style="{{ stackStyle }}" onPointerDown="{{ onStackDown }}" onPointerUp="{{ onStackUp }}" data-screen-label="Stack screen">
+      <div style="{{ topBarStyle }}">
+        <dc-import name="LLWordmark" size="{{ 20 }}" hint-size="120,28"></dc-import>
+        <dc-import name="LLSwipeAffordance" direction="down" label="Search" on-click="{{ openSearch }}" hint-size="120,40"></dc-import>
+      </div>
+
+      <div style="{{ stageStyle }}">
+        <sc-if value="{{ showIdle }}" hint-placeholder-val="{{ true }}">
+          <div style="{{ idleWrap }}">
+            <dc-import name="LLWordmark" size="{{ 44 }}" hint-size="240,60"></dc-import>
+            <p style="{{ idlePrompt }}">Swipe down to search PubMed and start listening.</p>
+          </div>
+        </sc-if>
+
+        <sc-if value="{{ showLoading }}" hint-placeholder-val="">
+          <div style="{{ loadingWrap }}">
+            <dc-import name="LLSynapseLoader" size="{{ 56 }}" label="Searching PubMed…" hint-size="200,140"></dc-import>
+          </div>
+        </sc-if>
+
+        <sc-if value="{{ showEmpty }}" hint-placeholder-val="">
+          <dc-import name="LLEmptyState" variant="no-results" title="No papers matched" message="{{ emptyMessage }}" action-label="Revise search" on-action="{{ openSearch }}" hint-size="100%,260px"></dc-import>
+        </sc-if>
+
+        <sc-if value="{{ showEnd }}" hint-placeholder-val="">
+          <dc-import name="LLEmptyState" variant="nothing-saved" title="You've reached the end" message="{{ endMessage }}" action-label="New search" on-action="{{ openSearch }}" hint-size="100%,260px"></dc-import>
+        </sc-if>
+
+        <sc-if value="{{ showResults }}" hint-placeholder-val="">
+          <div style="{{ cardArea }}">
+            <div style="{{ cardWrap }}" data-ll-card="1">
+              <dc-import name="LLPaperCard" style="flex:1;min-height:0;display:flex;flex-direction:column" title="{{ current.title }}" meta-line="{{ current.metaLine }}" sentences="{{ current.abstract }}" current-index="{{ currentSentence }}" active="{{ started }}" fill="{{ true }}" abstract-pad-bottom="{{ 150 }}" decide-signal="{{ decideSignal }}" on-decide="{{ onCardDecide }}" hint-size="100%,100%"></dc-import>
+            </div>
+          </div>
+        </sc-if>
+      </div>
+
+      <div style="{{ controlsStyle }}">
+        <sc-if value="{{ showResults }}" hint-placeholder-val="{{ true }}">
+          <div style="{{ nextLine }}">
+            <dc-import name="LLNextUpPreview" title="{{ nextTitle }}" hint-size="100%,56px"></dc-import>
+          </div>
+        </sc-if>
+        <div style="{{ playRow }}">
+          <sc-if value="{{ showResults }}" hint-placeholder-val="{{ true }}">
+            <dc-import name="LLDecisionButtons" only="skip" show-labels="{{ false }}" size="{{ 48 }}" disabled="{{ decisionsDisabled }}" on-skip="{{ onSkipBtn }}" hint-size="48,48"></dc-import>
+          </sc-if>
+          <dc-import name="LLPlayButton" playing="{{ playing }}" disabled="{{ playDisabled }}" size="{{ 68 }}" on-click="{{ togglePlay }}" hint-size="68,68"></dc-import>
+          <sc-if value="{{ showResults }}" hint-placeholder-val="{{ true }}">
+            <dc-import name="LLDecisionButtons" only="interested" show-labels="{{ false }}" size="{{ 48 }}" disabled="{{ decisionsDisabled }}" on-interested="{{ onInterestedBtn }}" hint-size="48,48"></dc-import>
+          </sc-if>
+          <div style="{{ muteSlot }}">
+            <sc-if value="{{ showResults }}" hint-placeholder-val="{{ true }}">
+              <dc-import name="LLMuteButton" muted="{{ muted }}" size="{{ 42 }}" on-click="{{ toggleMute }}" hint-size="42,42"></dc-import>
+            </sc-if>
+          </div>
+        </div>
+        <dc-import name="LLSwipeAffordance" direction="up" label="{{ savedAffLabel }}" disabled="{{ savedAffDisabled }}" on-click="{{ openSaved }}" hint-size="180,36"></dc-import>
+      </div>
+    </div>
+
+    <!-- SEARCH & SETTINGS PANEL -->
+    <div style="{{ searchPanelStyle }}">
+      <dc-import name="LLSearchSettingsPanel" query="{{ query }}" settings="{{ settings }}" loading="{{ loading }}" result-count="{{ resultCount }}" on-change="{{ onSettingsChange }}" on-query-change="{{ onQueryChange }}" on-start="{{ runSearch }}" on-close="{{ closeSearch }}" hint-size="100%,100%"></dc-import>
+    </div>
+
+    <!-- SAVED LIST PANEL -->
+    <div style="{{ savedPanelStyle }}">
+      <dc-import name="LLSavedListPanel" papers="{{ savedForPanel }}" connected="{{ zoteroConnected }}" zotero-user="{{ zoteroUser }}" on-remove="{{ onRemoveSaved }}" on-push-zotero="{{ openZotero }}" on-download-csv="{{ downloadCsv }}" on-disconnect="{{ disconnectZotero }}" on-close="{{ closeSaved }}" hint-size="100%,100%"></dc-import>
+    </div>
+
+    <!-- ZOTERO DIALOG -->
+    <sc-if value="{{ dialogOpen }}" hint-placeholder-val="">
+      <dc-import name="LLZoteroPushDialog" step="{{ dialogStep }}" paper-count="{{ savedCount }}" collections="{{ collections }}" target-name="{{ dialogTarget }}" on-connect="{{ zoteroConnect }}" on-save="{{ zoteroSave }}" on-cancel="{{ closeDialog }}" on-done="{{ zoteroDone }}" on-retry="{{ zoteroRetry }}" on-download-csv="{{ downloadCsv }}" hint-size="100%,100%"></dc-import>
+    </sc-if>
+
+    <!-- TOAST -->
+    <sc-if value="{{ toastOpen }}" hint-placeholder-val="">
+      <div style="{{ toastWrap }}">
+        <dc-import name="LLToast" message="{{ toast.message }}" variant="{{ toast.variant }}" hint-size="auto,56px"></dc-import>
+      </div>
+    </sc-if>
+
+  </div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{}">
+const LL_PAPERS = [
+  { id: 'p1', title: 'Spiking Neural Networks for Real-Time Neuromorphic Inference', author: 'Smith', journal: 'Nature Neuroscience', year: '2025',
+    abstract: ['Efficient spike-based encoding remains a central challenge for real-time neuromorphic systems.', 'We introduce a temporal coding scheme that cuts spike count by forty percent while preserving representational fidelity.', 'Across three benchmark tasks, accuracy stayed within one percent of dense baselines.', 'These results suggest event-driven inference is viable on power-constrained edge hardware.'] },
+  { id: 'p2', title: 'Temporal Coding in Cortical Microcircuits', author: 'Lee', journal: 'Neuron', year: '2024',
+    abstract: ['Cortical neurons carry information in the precise timing of their spikes, not only their rate.', 'Using paired recordings, we show that millisecond-scale latencies encode stimulus contrast.', 'A simple latency-decoding model predicts behavioral thresholds in a discrimination task.'] },
+  { id: 'p3', title: 'Energy-Efficient Event-Driven Vision Sensors', author: 'Okafor', journal: 'Nature Electronics', year: '2025',
+    abstract: ['Conventional frame-based cameras waste power capturing static scenes.', 'Our event-driven sensor reports only pixel-level changes, reducing data volume by two orders of magnitude.', 'Paired with a spiking backbone, the system tracks fast motion at under ten milliwatts.'] },
+  { id: 'p4', title: 'Synaptic Plasticity Rules for On-Chip Learning', author: 'Vasquez', journal: 'Science Robotics', year: '2023',
+    abstract: ['On-chip learning demands plasticity rules that are local, stable, and cheap to compute.', 'We derive a three-factor rule that approximates backpropagation using only locally available signals.', 'A robotic arm trained on-chip adapts to payload changes within minutes.'] },
+  { id: 'p5', title: 'Benchmarking Spiking Transformers on Language Tasks', author: 'Nakamura', journal: 'eLife', year: '2024',
+    abstract: ['Spiking transformers promise the expressivity of attention at a fraction of the energy.', 'We benchmark four architectures across standard language understanding tasks.', 'The best model recovers ninety-four percent of dense-transformer accuracy at half the energy.'] },
+  { id: 'p6', title: 'Dendritic Computation in Biological and Artificial Neurons', author: 'Haddad', journal: 'Cell Reports', year: '2025',
+    abstract: ['Dendrites perform nonlinear computations that single-compartment models ignore.', 'We build an artificial neuron with active dendritic subunits and test it on a memory task.', 'The dendritic model solves problems that require twice as many point neurons.'] },
+];
+
+class Component extends DCLogic {
+  _alive = true;
+  _ttsOK = false;
+  _voice = null;
+  _segs = [];
+  _ptr = 0;
+  _ended = false;
+  _gapTimer = null;
+
+  state = {
+    panel: 'stack',            // stack | search | saved
+    phase: 'idle',             // idle | loading | results | empty
+    query: '',
+    resultCount: null,
+    settings: { sort: 'relevance', fields: { lastAuthor: true, allAuthors: false, journal: true, pubDate: true }, defaultBehavior: 'notInterested', speed: 1.1, format: 'audiobook' },
+    queue: [],
+    index: 0,
+    saved: [],
+    playing: false,
+    muted: false,
+    started: false,
+    currentSentence: -1,
+    decideSignal: null,
+    pulse: false,
+    zoteroConnected: false,
+    dialogOpen: false,
+    dialogStep: 'connect',
+    dialogTarget: '',
+    toast: null,
+    toastOpen: false,
+  };
+
+  componentDidMount() {
+    this._ttsOK = typeof window !== 'undefined' && !!window.speechSynthesis;
+    if (this._ttsOK) {
+      const pick = () => {
+        const vs = window.speechSynthesis.getVoices();
+        this._voice = vs.find(v => /^en(-|_)?(US|GB)/i.test(v.lang) && /natural|google|samantha|daniel|siri|aaron|karen/i.test(v.name))
+          || vs.find(v => /^en/i.test(v.lang)) || vs[0] || null;
+      };
+      pick();
+      window.speechSynthesis.onvoiceschanged = pick;
+    }
+    this._key = (e) => this.onKey(e);
+    window.addEventListener('keydown', this._key);
+  }
+  componentWillUnmount() {
+    this._alive = false;
+    clearTimeout(this._gapTimer);
+    try { window.speechSynthesis.cancel(); } catch (_) {}
+    window.removeEventListener('keydown', this._key);
+  }
+
+  // ---------- derived ----------
+  current() { return this.state.queue[this.state.index] || null; }
+  next() { return this.state.queue[this.state.index + 1] || null; }
+
+  metaDisplay(p) {
+    const f = this.state.settings.fields, parts = [];
+    if (f.lastAuthor) parts.push(p.author + ' et al.');
+    if (f.journal) parts.push(p.journal);
+    if (f.pubDate) parts.push(p.year);
+    return parts.join('  ·  ');
+  }
+  spokenMeta(p) {
+    const f = this.state.settings.fields, parts = [];
+    if (f.lastAuthor) parts.push(p.author + ' and colleagues');
+    if (f.journal) parts.push(p.journal);
+    if (f.pubDate) parts.push(p.year);
+    return parts.join('. ');
+  }
+
+  // ---------- search ----------
+  onQueryChange(v) {
+    const rc = v.trim().length ? (120 + (v.length * 37) % 900) : null;
+    this.setState({ query: v, resultCount: rc });
+  }
+  onSettingsChange(next) { this.setState({ settings: next }); }
+  runSearch() {
+    const q = this.state.query.trim();
+    if (!q) return;
+    this.stopSpeech();
+    this.setState({ panel: 'stack', phase: 'loading', playing: false, started: false, currentSentence: -1, saved: [] });
+    clearTimeout(this._searchTimer);
+    this._searchTimer = setTimeout(() => {
+      if (!this._alive) return;
+      const gibberish = q.length < 4 || /(asd|qwe|zxc|xyzq|zzz|\d{4,})/i.test(q.replace(/\s/g, ''));
+      if (gibberish) { this.setState({ phase: 'empty' }); return; }
+      const queue = this.sortQueue(LL_PAPERS.slice(), this.state.settings.sort);
+      this._segs = []; this._ptr = 0; this._ended = false;
+      this.setState({ phase: 'results', queue, index: 0, started: false, currentSentence: -1 });
+    }, 950);
+  }
+  sortQueue(arr, sort) {
+    if (sort === 'recency') return arr.sort((a, b) => b.year.localeCompare(a.year));
+    if (sort === 'citations') return arr.slice().reverse();
+    return arr;
+  }
+  openSearch() { this.stopSpeech(); this.setState({ panel: 'search', playing: false, query: this.state.phase === 'idle' ? this.state.query : '' }); }
+  closeSearch() { if (this.state.query.trim()) this.runSearch(); else this.setState({ panel: 'stack' }); }
+
+  // ---------- saved panel ----------
+  openSaved() {
+    if (this.state.saved.length === 0) { this.toast('Nothing saved yet', 'info'); return; }
+    this.stopSpeech(); this.setState({ panel: 'saved', playing: false });
+  }
+  closeSaved() { this.setState({ panel: 'stack' }); }
+  onRemoveSaved(id) { this.setState(s => ({ saved: s.saved.filter(p => p.id !== id) })); }
+
+  // ---------- playback engine ----------
+  buildSegs(p) {
+    const segs = [{ type: 'title', text: p.title, gap: 850 }];
+    const meta = this.spokenMeta(p);
+    if (meta) segs.push({ type: 'meta', text: meta, gap: 850 });
+    p.abstract.forEach((s, i) => segs.push({ type: 'sentence', idx: i, text: s, gap: 240 }));
+    return segs;
+  }
+  togglePlay() {
+    if (this.playDisabled()) return;
+    if (this.state.playing) { this.pause(); } else { this.play(); }
+  }
+  play() {
+    const p = this.current(); if (!p) return;
+    if (!this._segs.length || this._segForId !== p.id) { this._segs = this.buildSegs(p); this._ptr = 0; this._ended = false; this._segForId = p.id; }
+    this.setState({ playing: true, started: true });
+    this.step();
+  }
+  pause() {
+    clearTimeout(this._gapTimer);
+    try { window.speechSynthesis.cancel(); } catch (_) {}
+    this.setState({ playing: false });
+  }
+  step() {
+    if (!this._alive || !this.state.playing) return;
+    const segs = this._segs;
+    if (this._ptr >= segs.length) { this.onPaperEnd(); return; }
+    const seg = segs[this._ptr];
+    const rate = this.state.settings.speed;
+    if (seg.type === 'sentence') this.setState({ currentSentence: seg.idx });
+    const advance = () => {
+      if (!this._alive || !this.state.playing) return;
+      this._ptr++;
+      this._gapTimer = setTimeout(() => this.step(), Math.max(80, seg.gap / Math.max(0.6, rate)));
+    };
+    if (this._ttsOK) {
+      try {
+        const u = new SpeechSynthesisUtterance(seg.text);
+        u.rate = Math.max(0.5, Math.min(2, rate)); u.pitch = 1; u.volume = this.state.muted ? 0 : 1;
+        if (this._voice) u.voice = this._voice;
+        u.onend = advance;
+        u.onerror = () => { this._ttsOK = false; advance(); };
+        this._curUtter = u;
+        window.speechSynthesis.speak(u);
+      } catch (e) { this._ttsOK = false; this.fallback(seg, rate, advance); }
+    } else {
+      this.fallback(seg, rate, advance);
+    }
+  }
+  fallback(seg, rate, advance) {
+    const words = seg.text.split(/\s+/).length;
+    const ms = Math.max(650, (words / (2.7 * rate)) * 1000);
+    this._gapTimer = setTimeout(advance, ms);
+  }
+  stopSpeech() {
+    clearTimeout(this._gapTimer);
+    try { window.speechSynthesis.cancel(); } catch (_) {}
+    this._curUtter = null;
+  }
+  toggleMute() {
+    const muted = !this.state.muted;
+    this.setState({ muted });
+    if (this.state.playing && this._ttsOK) {
+      // re-speak current segment with new volume, preserving highlight index
+      clearTimeout(this._gapTimer);
+      try { window.speechSynthesis.cancel(); } catch (_) {}
+      setTimeout(() => { if (this._alive && this.state.playing) this.step(); }, 30);
+    }
+  }
+  onPaperEnd() {
+    if (this._ended) return;
+    this._ended = true;
+    this.chime();
+    const dir = this.state.settings.defaultBehavior === 'interested' ? 'interested' : 'skip';
+    this.triggerDecision(dir);
+  }
+  chime() {
+    if (this.state.muted) { this.setState({ pulse: true }); setTimeout(() => this._alive && this.setState({ pulse: false }), 480); return; }
+    try {
+      const Ctx = window.AudioContext || window.webkitAudioContext; if (!Ctx) return;
+      if (!this._ac) this._ac = new Ctx();
+      const ac = this._ac, o = ac.createOscillator(), g = ac.createGain();
+      o.connect(g); g.connect(ac.destination); o.type = 'sine'; o.frequency.value = 880;
+      g.gain.setValueAtTime(0.0001, ac.currentTime);
+      g.gain.exponentialRampToValueAtTime(0.11, ac.currentTime + 0.012);
+      g.gain.exponentialRampToValueAtTime(0.0001, ac.currentTime + 0.3);
+      o.start(); o.stop(ac.currentTime + 0.32);
+    } catch (_) {}
+  }
+
+  // ---------- decisions ----------
+  triggerDecision(dir) {
+    if (!this.current()) return;
+    this.setState(s => ({ decideSignal: { dir, nonce: (s.decideSignal ? s.decideSignal.nonce : 0) + 1 } }));
+  }
+  onSkipBtn() { this.triggerDecision('skip'); }
+  onInterestedBtn() { this.triggerDecision('interested'); }
+  onCardDecide(dir) {
+    this.stopSpeech();
+    const cur = this.current();
+    const saved = (dir === 'interested' && cur && !this.state.saved.some(p => p.id === cur.id))
+      ? this.state.saved.concat([cur]) : this.state.saved;
+    const nextIndex = this.state.index + 1;
+    this._segs = []; this._ptr = 0; this._ended = false; this._segForId = null;
+    const hasNext = !!this.state.queue[nextIndex];
+    this.setState({ saved, index: nextIndex, currentSentence: -1, playing: false, started: hasNext });
+    if (hasNext) {
+      setTimeout(() => { if (this._alive) this.play(); }, 260);
+    }
+  }
+
+  // ---------- zotero ----------
+  openZotero() {
+    if (this.state.zoteroConnected) this.setState({ dialogOpen: true, dialogStep: 'choose' });
+    else this.setState({ dialogOpen: true, dialogStep: 'connect' });
+  }
+  closeDialog() { this.setState({ dialogOpen: false }); }
+  zoteroConnect() {
+    this.setState({ dialogStep: 'saving' });
+    setTimeout(() => { if (this._alive) this.setState({ zoteroConnected: true, dialogStep: 'choose' }); }, 1100);
+  }
+  zoteroSave(target) {
+    const name = target.newName || (this.collections().find(c => c.id === target.collectionId) || {}).name || 'your collection';
+    this.setState({ dialogStep: 'saving', dialogTarget: name });
+    setTimeout(() => { if (this._alive) this.setState({ dialogStep: 'success' }); }, 1300);
+  }
+  zoteroRetry() { this.setState({ dialogStep: 'choose' }); }
+  zoteroDone() {
+    const n = this.state.saved.length;
+    this.setState({ dialogOpen: false });
+    this.toast('Saved ' + n + ' papers to “' + this.state.dialogTarget + '”', 'success');
+  }
+  disconnectZotero() { this.setState({ zoteroConnected: false }); this.toast('Disconnected from Zotero', 'info'); }
+  collections() { return [{ id: 'c1', name: 'Reading List' }, { id: 'c2', name: 'Neuro Journal Club' }, { id: 'c3', name: 'Grant — Aim 2' }]; }
+
+  downloadCsv() {
+    const rows = [['title', 'last_author', 'journal', 'year']].concat(this.state.saved.map(p => [p.title, p.author, p.journal, p.year]));
+    const csv = rows.map(r => r.map(x => '"' + String(x).replace(/"/g, '""') + '"').join(',')).join('\n');
+    try {
+      const blob = new Blob([csv], { type: 'text/csv' });
+      const url = URL.createObjectURL(blob); const a = document.createElement('a');
+      a.href = url; a.download = 'litlist-saved.csv'; document.body.appendChild(a); a.click(); a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+    } catch (_) {}
+    this.setState({ dialogOpen: false });
+    this.toast('CSV downloaded', 'success');
+  }
+
+  // ---------- toast ----------
+  toast(message, variant) {
+    clearTimeout(this._toastTimer);
+    this.setState({ toast: { message, variant: variant || 'info' }, toastOpen: true });
+    this._toastTimer = setTimeout(() => this._alive && this.setState({ toastOpen: false }), 2600);
+  }
+
+  // ---------- gestures / keys ----------
+  onStackDown(e) {
+    if (e.target.closest && e.target.closest('[data-ll-card]')) { this._sy = null; return; }
+    if (e.target.closest && e.target.closest('button')) { this._sy = null; return; }
+    this._sy = e.clientY; this._sx = e.clientX;
+  }
+  onStackUp(e) {
+    if (this._sy == null) return;
+    const dy = e.clientY - this._sy, dx = e.clientX - this._sx;
+    this._sy = null;
+    if (Math.abs(dy) < 55 || Math.abs(dx) > Math.abs(dy)) return;
+    if (dy > 0) this.openSearch(); else this.openSaved();
+  }
+  onKey(e) {
+    const tag = (e.target && e.target.tagName) || '';
+    if (e.key === 'Escape') { if (this.state.dialogOpen) this.closeDialog(); else if (this.state.panel !== 'stack') this.setState({ panel: 'stack' }); return; }
+    if (/INPUT|TEXTAREA|SELECT/.test(tag)) return;
+    if (this.state.panel !== 'stack' || this.state.dialogOpen) return;
+    if (e.key === 'ArrowDown') { e.preventDefault(); this.openSearch(); }
+    else if (e.key === 'ArrowUp') { e.preventDefault(); this.openSaved(); }
+    else if (this.state.phase === 'results' && this.current()) {
+      if (e.key === 'ArrowRight') { e.preventDefault(); this.triggerDecision('interested'); }
+      else if (e.key === 'ArrowLeft') { e.preventDefault(); this.triggerDecision('skip'); }
+      else if (e.key === ' ') { e.preventDefault(); this.togglePlay(); }
+    }
+  }
+
+  playDisabled() { return this.state.phase !== 'results' || !this.current(); }
+
+  renderVals() {
+    const s = this.state;
+    const font = "Tahoma, Verdana, Geneva, 'DejaVu Sans', sans-serif";
+    const cur = this.current();
+    const nx = this.next();
+    const showResults = s.phase === 'results' && !!cur;
+    const showEnd = s.phase === 'results' && !cur && s.queue.length > 0;
+    return {
+      // state passthrough
+      query: s.query, settings: s.settings, loading: s.phase === 'loading',
+      resultCount: s.resultCount, playing: s.playing, muted: s.muted, started: s.started,
+      currentSentence: s.currentSentence, decideSignal: s.decideSignal,
+      zoteroConnected: s.zoteroConnected, zoteroUser: 'you',
+      dialogOpen: s.dialogOpen, dialogStep: s.dialogStep, dialogTarget: s.dialogTarget,
+      collections: this.collections(), savedCount: s.saved.length,
+      toast: s.toast || { message: '', variant: 'info' }, toastOpen: s.toastOpen,
+
+      // phase flags
+      showIdle: s.phase === 'idle', showLoading: s.phase === 'loading',
+      showEmpty: s.phase === 'empty', showResults, showEnd,
+      emptyMessage: 'No papers matched “' + (s.query || '') + '”. Swipe down to try a different search.',
+      endMessage: 'You screened every paper in this queue. Review your saved list or start a new search.',
+
+      current: cur ? { title: cur.title, metaLine: this.metaDisplay(cur), abstract: cur.abstract } : { title: '', metaLine: '', abstract: [] },
+      nextTitle: nx ? nx.title : '',
+
+      savedForPanel: s.saved.map(p => ({ id: p.id, title: p.title, meta: p.author + ' et al. · ' + p.year })),
+
+      decisionsDisabled: !cur,
+      playDisabled: this.playDisabled(),
+      savedAffLabel: s.saved.length ? 'Saved (' + s.saved.length + ')' : 'Saved list',
+      savedAffDisabled: s.saved.length === 0,
+
+      // handlers
+      openSearch: () => this.openSearch(), closeSearch: () => this.closeSearch(),
+      openSaved: () => this.openSaved(), closeSaved: () => this.closeSaved(),
+      onQueryChange: (v) => this.onQueryChange(v), onSettingsChange: (n) => this.onSettingsChange(n),
+      runSearch: () => this.runSearch(),
+      togglePlay: () => this.togglePlay(), toggleMute: () => this.toggleMute(),
+      onSkipBtn: () => this.onSkipBtn(), onInterestedBtn: () => this.onInterestedBtn(),
+      onCardDecide: (dir) => this.onCardDecide(dir),
+      onRemoveSaved: (id) => this.onRemoveSaved(id),
+      openZotero: () => this.openZotero(), closeDialog: () => this.closeDialog(),
+      zoteroConnect: () => this.zoteroConnect(), zoteroSave: (t) => this.zoteroSave(t),
+      zoteroRetry: () => this.zoteroRetry(), zoteroDone: () => this.zoteroDone(),
+      disconnectZotero: () => this.disconnectZotero(), downloadCsv: () => this.downloadCsv(),
+      onStackDown: (e) => this.onStackDown(e), onStackUp: (e) => this.onStackUp(e),
+
+      // styles
+      shellStyle: { minHeight: '100vh', display: 'flex', alignItems: 'stretch', justifyContent: 'center', background: '#EEEEEB', padding: '0', boxSizing: 'border-box' },
+      appStyle: { position: 'relative', width: '100%', maxWidth: '480px', height: '100vh', background: '#fff', overflow: 'hidden', boxShadow: '0 0 60px rgba(26,26,26,.08)', display: 'flex', flexDirection: 'column', fontFamily: font },
+      stackStyle: { position: 'absolute', inset: 0, display: 'flex', flexDirection: 'column', background: '#fff' },
+      topBarStyle: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '16px 20px 10px', flex: 'none' },
+      stageStyle: { flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', justifyContent: 'center', padding: '4px 16px 0', overflow: 'hidden' },
+      idleWrap: { display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '22px', textAlign: 'center', animation: 'll-breathe 4s ease-in-out infinite' },
+      idlePrompt: { font: `400 16px/1.55 ${font}`, color: '#595959', maxWidth: '24ch', margin: 0 },
+      loadingWrap: { display: 'flex', alignItems: 'center', justifyContent: 'center', flex: 1 },
+      cardArea: { display: 'flex', flexDirection: 'column', width: '100%', flex: 1, minHeight: 0 },
+      cardWrap: { width: '100%', flex: 1, minHeight: 0, display: 'grid', gridTemplateRows: '1fr', borderRadius: '16px', animation: s.pulse ? 'll-pulse-ring .48s ease-out' : 'none' },
+      controlsStyle: { position: 'absolute', left: 0, right: 0, bottom: 0, zIndex: 5, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '10px', padding: '20px', background: 'linear-gradient(to top, #fff 62%, rgba(255,255,255,.96) 84%, rgba(255,255,255,0))', pointerEvents: 'none' },
+      nextLine: { width: '100%', maxWidth: '340px', pointerEvents: 'auto' },
+      playRow: { position: 'relative', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '20px', width: '100%', pointerEvents: 'auto' },
+      playSpacer: { width: '42px', height: '42px', flex: 'none' },
+      muteSlot: { position: 'absolute', right: '4px', top: '50%', transform: 'translateY(-50%)', width: '42px', height: '42px', flex: 'none', display: 'flex', alignItems: 'center', justifyContent: 'center' },
+      searchPanelStyle: { position: 'absolute', inset: 0, background: '#fff', zIndex: 30, transform: s.panel === 'search' ? 'translateY(0)' : 'translateY(-102%)', transition: 'transform .36s cubic-bezier(.4,0,.2,1)', boxShadow: s.panel === 'search' ? '0 20px 50px rgba(26,26,26,.12)' : 'none' },
+      savedPanelStyle: { position: 'absolute', inset: 0, background: '#fff', zIndex: 30, transform: s.panel === 'saved' ? 'translateY(0)' : 'translateY(102%)', transition: 'transform .36s cubic-bezier(.4,0,.2,1)', boxShadow: s.panel === 'saved' ? '0 -20px 50px rgba(26,26,26,.12)' : 'none' },
+      toastWrap: { position: 'absolute', left: 0, right: 0, bottom: '28px', display: 'flex', justifyContent: 'center', zIndex: 120, pointerEvents: 'none' },
+    };
+  }
+}
+</script>
+</body>
+</html>

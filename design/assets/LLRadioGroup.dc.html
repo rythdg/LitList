@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<fieldset style="{{ fieldsetStyle }}">
+  <sc-if value="{{ legend }}" hint-placeholder-val="Sort by">
+    <legend style="{{ legendStyle }}">{{ legend }}</legend>
+  </sc-if>
+  <div style="{{ listStyle }}">
+    <sc-for list="{{ opts }}" as="opt" hint-placeholder-count="3">
+      <label style="{{ opt.rowStyle }}" style-hover="{{ opt.rowHover }}">
+        <span style="{{ opt.dotOuter }}"><span style="{{ opt.dotInner }}"></span></span>
+        <span style="{{ opt.textWrap }}">
+          <span style="{{ opt.labelStyle }}">{{ opt.label }}</span>
+          <sc-if value="{{ opt.hint }}" hint-placeholder-val="">
+            <span style="{{ opt.hintStyle }}">{{ opt.hint }}</span>
+          </sc-if>
+        </span>
+        <input type="radio" name="{{ name }}" checked="{{ opt.checked }}" disabled="{{ opt.disabled }}" onChange="{{ opt.onChange }}" style="{{ srOnly }}" />
+      </label>
+    </sc-for>
+  </div>
+</fieldset>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{&quot;$preview&quot;:{&quot;width&quot;:300,&quot;height&quot;:200},&quot;legend&quot;:{&quot;editor&quot;:&quot;text&quot;,&quot;default&quot;:&quot;Sort by&quot;,&quot;tsType&quot;:&quot;string&quot;},&quot;value&quot;:{&quot;editor&quot;:&quot;text&quot;,&quot;default&quot;:&quot;relevance&quot;,&quot;tsType&quot;:&quot;string&quot;},&quot;name&quot;:{&quot;editor&quot;:&quot;text&quot;,&quot;default&quot;:&quot;sort&quot;,&quot;tsType&quot;:&quot;string&quot;},&quot;options&quot;:{&quot;editor&quot;:null,&quot;default&quot;:[{&quot;value&quot;:&quot;relevance&quot;,&quot;label&quot;:&quot;Relevance&quot;},{&quot;value&quot;:&quot;recency&quot;,&quot;label&quot;:&quot;Recency&quot;},{&quot;value&quot;:&quot;citations&quot;,&quot;label&quot;:&quot;Citation count&quot;}],&quot;tsType&quot;:&quot;Array&lt;{value:string,label:string,hint?:string,disabled?:boolean}&gt;&quot;},&quot;onChange&quot;:{&quot;editor&quot;:null,&quot;tsType&quot;:&quot;(value: string) =&gt; void&quot;}}">
+class Component extends DCLogic {
+  renderVals() {
+    const p = this.props;
+    const font = "Tahoma, Verdana, Geneva, 'DejaVu Sans', sans-serif";
+    const value = p.value;
+    const raw = Array.isArray(p.options) ? p.options : [];
+    const opts = raw.map((o) => {
+      const checked = o.value === value;
+      const disabled = !!o.disabled;
+      return {
+        label: o.label, hint: o.hint || '', checked, disabled,
+        onChange: disabled ? undefined : () => p.onChange && p.onChange(o.value),
+        rowStyle: {
+          display: 'flex', alignItems: 'flex-start', gap: '11px', padding: '9px 10px', borderRadius: '8px',
+          cursor: disabled ? 'not-allowed' : 'pointer', opacity: disabled ? 0.45 : 1,
+          transition: 'background .12s', position: 'relative', fontFamily: font,
+        },
+        rowHover: disabled ? {} : { background: '#F7F7F5' },
+        dotOuter: {
+          flex: 'none', width: '20px', height: '20px', marginTop: '1px', borderRadius: '50%',
+          border: `1.75px solid ${checked ? '#F05A22' : '#B3B3B3'}`, background: '#fff',
+          display: 'inline-flex', alignItems: 'center', justifyContent: 'center', transition: 'border-color .15s',
+        },
+        dotInner: {
+          width: '10px', height: '10px', borderRadius: '50%', background: '#F05A22',
+          transform: checked ? 'scale(1)' : 'scale(0)', transition: 'transform .15s cubic-bezier(.4,0,.2,1)',
+        },
+        textWrap: { display: 'flex', flexDirection: 'column', gap: '2px' },
+        labelStyle: { font: `${checked ? 600 : 400} 15px/1.25 ${font}`, color: '#1A1A1A' },
+        hintStyle: { font: `400 12px/1.3 ${font}`, color: '#595959' },
+      };
+    });
+    return {
+      name: p.name || 'll-radio-' + Math.random().toString(36).slice(2, 7),
+      legend: p.legend || '',
+      opts,
+      fieldsetStyle: { border: 'none', margin: 0, padding: 0, minInlineSize: 'auto', fontFamily: font },
+      legendStyle: { font: `600 13px/1 ${font}`, color: '#595959', letterSpacing: '.03em', textTransform: 'uppercase', padding: 0, marginBottom: '8px' },
+      listStyle: { display: 'flex', flexDirection: 'column', gap: '2px' },
+      srOnly: { position: 'absolute', opacity: 0, width: '1px', height: '1px', pointerEvents: 'none' },
+    };
+  }
+}
+</script>
+</body>
+</html>

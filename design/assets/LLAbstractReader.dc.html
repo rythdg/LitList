@@ -1,0 +1,65 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<div style="{{ wrapStyle }}" aria-label="Abstract">
+  <sc-if value="{{ idle }}" hint-placeholder-val="{{ true }}">
+    <div style="{{ idleStyle }}">
+      <span style="{{ idleDot }}"></span>
+      <span>{{ idleText }}</span>
+    </div>
+  </sc-if>
+  <sc-if value="{{ active }}" hint-placeholder-val="">
+    <p style="{{ paraStyle }}">
+      <sc-for list="{{ items }}" as="item" hint-placeholder-count="4">
+        <span style="{{ item.style }}">{{ item.text }} </span>
+      </sc-for>
+    </p>
+  </sc-if>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{&quot;$preview&quot;:{&quot;width&quot;:420,&quot;height&quot;:240},&quot;sentences&quot;:{&quot;editor&quot;:null,&quot;default&quot;:[&quot;Efficient spike-based encoding remains a central challenge for neuromorphic systems.&quot;,&quot;We present a temporal coding scheme that reduces spike count by forty percent.&quot;,&quot;Across three benchmark tasks, accuracy was preserved within one percent of dense baselines.&quot;],&quot;tsType&quot;:&quot;string[]&quot;},&quot;currentIndex&quot;:{&quot;editor&quot;:&quot;int&quot;,&quot;default&quot;:1,&quot;min&quot;:-1,&quot;max&quot;:20,&quot;tsType&quot;:&quot;number&quot;},&quot;active&quot;:{&quot;editor&quot;:&quot;boolean&quot;,&quot;default&quot;:true,&quot;tsType&quot;:&quot;boolean&quot;},&quot;idleText&quot;:{&quot;editor&quot;:&quot;text&quot;,&quot;default&quot;:&quot;Press play to hear the abstract&quot;,&quot;tsType&quot;:&quot;string&quot;},&quot;maxHeight&quot;:{&quot;editor&quot;:&quot;int&quot;,&quot;default&quot;:0,&quot;tsType&quot;:&quot;number&quot;}}">
+class Component extends DCLogic {
+  renderVals() {
+    const p = this.props;
+    const font = "Tahoma, Verdana, Geneva, 'DejaVu Sans', sans-serif";
+    const sentences = Array.isArray(p.sentences) ? p.sentences : [];
+    const cur = p.currentIndex ?? -1;
+    const active = !!p.active;
+    const items = sentences.map((text, i) => {
+      let color = '#B3B3B3', weight = 400, bg = 'transparent';
+      if (i < cur) { color = '#595959'; }
+      else if (i === cur) { color = '#1A1A1A'; weight = 600; bg = 'rgba(240,90,34,.14)'; }
+      return {
+        text,
+        style: {
+          color, fontWeight: weight, background: bg, borderRadius: '3px',
+          boxDecorationBreak: 'clone', WebkitBoxDecorationBreak: 'clone',
+          padding: bg === 'transparent' ? '0' : '1px 2px',
+          transition: 'color .25s, background .25s',
+        },
+      };
+    });
+    return {
+      idle: !active,
+      active,
+      items,
+      idleText: p.idleText || 'Press play to hear the abstract',
+      wrapStyle: {
+        fontFamily: font, fontSize: (p.fontSize || 17) + 'px', lineHeight: 1.62,
+        maxHeight: p.maxHeight ? p.maxHeight + 'px' : 'none', overflowY: p.maxHeight ? 'auto' : 'visible',
+      },
+      idleStyle: { display: 'flex', alignItems: 'center', gap: '10px', color: '#B3B3B3', font: `400 15px/1.4 ${font}`, fontStyle: 'italic' },
+      idleDot: { width: '7px', height: '7px', borderRadius: '50%', background: '#D9D9D9', flex: 'none' },
+      paraStyle: { margin: 0, textWrap: 'pretty' },
+    };
+  }
+}
+</script>
+</body>
+</html>

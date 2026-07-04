@@ -1,0 +1,48 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet><style>
+.ll-speed-range { -webkit-appearance:none; appearance:none; width:100%; height:4px; border-radius:999px; background:#D9D9D9; outline:none; margin:0; }
+.ll-speed-range::-webkit-slider-thumb { -webkit-appearance:none; appearance:none; width:22px; height:22px; border-radius:50%; background:#F05A22; border:3px solid #fff; box-shadow:0 1px 4px rgba(26,26,26,.25); cursor:pointer; }
+.ll-speed-range::-moz-range-thumb { width:22px; height:22px; border-radius:50%; background:#F05A22; border:3px solid #fff; box-shadow:0 1px 4px rgba(26,26,26,.25); cursor:pointer; }
+.ll-speed-range:focus-visible { box-shadow:0 0 0 3px rgba(240,90,34,.2); }
+</style></helmet>
+<div style="{{ wrapStyle }}">
+  <div style="{{ headStyle }}">
+    <span style="{{ labelStyle }}">{{ label }}</span>
+    <span style="{{ readoutStyle }}">{{ readout }}</span>
+  </div>
+  <input class="ll-speed-range" type="range" min="{{ min }}" max="{{ max }}" step="{{ step }}" value="{{ value }}" onInput="{{ onInputRange }}" aria-label="{{ label }}" style="{{ trackStyle }}" />
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{&quot;$preview&quot;:{&quot;width&quot;:320,&quot;height&quot;:80},&quot;label&quot;:{&quot;editor&quot;:&quot;text&quot;,&quot;default&quot;:&quot;Speed&quot;,&quot;tsType&quot;:&quot;string&quot;},&quot;value&quot;:{&quot;editor&quot;:&quot;range&quot;,&quot;default&quot;:1.1,&quot;min&quot;:0.5,&quot;max&quot;:2,&quot;step&quot;:0.1,&quot;tsType&quot;:&quot;number&quot;},&quot;min&quot;:{&quot;editor&quot;:&quot;float&quot;,&quot;default&quot;:0.5,&quot;tsType&quot;:&quot;number&quot;},&quot;max&quot;:{&quot;editor&quot;:&quot;float&quot;,&quot;default&quot;:2,&quot;tsType&quot;:&quot;number&quot;},&quot;step&quot;:{&quot;editor&quot;:&quot;float&quot;,&quot;default&quot;:0.1,&quot;tsType&quot;:&quot;number&quot;},&quot;unit&quot;:{&quot;editor&quot;:&quot;text&quot;,&quot;default&quot;:&quot;×&quot;,&quot;tsType&quot;:&quot;string&quot;},&quot;onChange&quot;:{&quot;editor&quot;:null,&quot;tsType&quot;:&quot;(value: number) =&gt; void&quot;}}">
+class Component extends DCLogic {
+  renderVals() {
+    const p = this.props;
+    const font = "Tahoma, Verdana, Geneva, 'DejaVu Sans', sans-serif";
+    const min = p.min ?? 0.5, max = p.max ?? 2, step = p.step ?? 0.1;
+    const value = p.value ?? 1.1;
+    const unit = p.unit ?? '×';
+    const pct = ((value - min) / (max - min)) * 100;
+    return {
+      label: p.label || 'Speed',
+      min, max, step, value,
+      readout: value.toFixed(1) + unit,
+      onInputRange: (e) => p.onChange && p.onChange(parseFloat(e.target.value)),
+      wrapStyle: { display: 'flex', flexDirection: 'column', gap: '12px', width: '100%', fontFamily: font },
+      headStyle: { display: 'flex', alignItems: 'baseline', justifyContent: 'space-between' },
+      labelStyle: { font: `600 13px/1 ${font}`, color: '#595959', letterSpacing: '.03em', textTransform: 'uppercase' },
+      readoutStyle: { font: `600 15px/1 ${font}`, color: '#F05A22', fontVariantNumeric: 'tabular-nums' },
+      trackStyle: { background: `linear-gradient(90deg, #F05A22 ${pct}%, #D9D9D9 ${pct}%)` },
+    };
+  }
+}
+</script>
+</body>
+</html>
