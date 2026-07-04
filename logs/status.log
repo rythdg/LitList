@@ -24,3 +24,32 @@ Do not delete or rewrite prior entries.
   stale read racing an in-flight log write — confirmed no real issue.
 - Tier 0 exit gate: CONFIRMED MET (independently, by both tester and
   adversarial review) after the CONTRACTS.md fix above.
+
+## 2026-07-04 (cont'd) — Tier 1 + Tier 2
+
+- Tier 1 Wave 1 (Task 1A, data model & session identity): DONE, merged.
+  tester + adversarial-generalist both cleared it; 4 non-blocking
+  hardening items tracked forward to Tier 3/5.
+- Tier 2 (Tasks 2A-2D, run in parallel with Tier 1): DONE, merged.
+  App shell/PWA, UI screens, state scaffolding, and the playback engine
+  all independently verified. Adversarial review caught and fixed a
+  real 100%-reproducible double-narration bug in the playback engine
+  (synchronous double play() calls) before merge.
+- Tier 1 Wave 2 (Tasks 1B/1C/1D — PubMed client, Zotero OAuth, tokenizer
+  & normalization): DONE, merged. Adversarial review caught and fixed
+  TWO separate credential-leak bugs (NCBI key/email leaked via an
+  exception message in 1B; raw Zotero OAuth tokens leaked via a log
+  line in 1C) — flagged as a pattern for Task 3D to guard against
+  systemically. Also caught and fixed a real narration bug in 1D (p ≤/≥
+  thresholds were silently mangled when read aloud) and two Task 3A
+  integration gaps (duplicate AbstractSection type, missing flattened
+  spoken_abstract) while cheap to fix.
+- Open item carried forward: SPEC.md §10.4 has no Zotero-disconnect
+  endpoint (frontend needs one) — add before Task 3B starts.
+- ZOTERO_CLIENT_KEY/ZOTERO_CLIENT_SECRET still requested from the human
+  (see logs/creds.log) — not a blocker so far, needed before any real
+  OAuth smoke test.
+- All of Tier 0, Tier 1, and Tier 2 are now committed to main. Full
+  backend suite: 123/123 passing. Full frontend suite: 21 files/83
+  tests passing.
+- Next up: Tier 3 (backend API surface — depends on all of Tier 1).
