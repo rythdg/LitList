@@ -206,6 +206,31 @@ file to use the app.
 
 ---
 
+## Reconciliation note (post Tier 1/2)
+
+This kit was authored before Tier 1 (backend) and Tier 2 (frontend) were
+built and merged — see `BuildPlan.md`'s Task 4A for the authoritative
+call on what to keep vs. discard when Task 4A actually wires up the
+core loop:
+
+- **Keep as reference:** `LLPaperCard`'s drag-to-decide gesture math
+  (axis-lock, commit threshold, transform/overlay animation,
+  `decideSignal` pattern) — genuinely unbuilt elsewhere, the most
+  valuable thing in this kit.
+- **Discard, don't reconcile:** the prototype's own TTS playback engine
+  and monolithic state management in `LitList.dc.html` — both are
+  superseded by the already-built, more rigorous, already-tested
+  `frontend/src/playback/usePlaybackEngine.ts` and the Zustand/TanStack
+  Query split in `frontend/src/state/`/`frontend/src/api/`.
+- **Known inaccuracies not to carry forward:** no "⚠ Retracted" badge
+  (§13.4, already implemented in the real `StackScreen.tsx`); mute is
+  implemented as cancel-and-re-speak instead of §6.5's required
+  live in-place volume change.
+- **Shape mismatch:** `sentences: string[]` + `currentIndex` is
+  simpler than the real pinned `AbstractSegment[]` shape (CONTRACTS.md
+  §1 — section headers, pause classes, display/spoken text pairs).
+  Task 4A will need to remap, not just swap in real data.
+
 ## Notes & assumptions
 
 - **PubMed / Zotero are mocked** in the prototype (search latency, result counts,

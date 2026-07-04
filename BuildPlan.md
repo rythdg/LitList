@@ -585,6 +585,29 @@ integration-only bugs (shape mismatches, timing assumptions) — Task
 check.
 
 **4A — Core loop wiring** (§11.4, ties 2C/2D to 3A)
+- **Design reference for the swipe gesture:** `design/assets/LLPaperCard.dc.html`
+  (Claude Design prototype, added after Tier 2 was already built and
+  independently assessed — see logs/senior-frontend-developer.build.log's
+  design-kit review) has real, working drag-to-decide math worth using
+  as the reference for this gesture specifically: axis-lock detection
+  (dominant x vs y), a 110px commit threshold, rotate+translate transform
+  proportional to drag distance, fading colored overlays keyed to drag
+  progress, and a `decideSignal` prop pattern so button/keyboard decisions
+  replay the identical exit animation as a real swipe (matches this
+  section's own single-decision-function requirement). It is NOT
+  drop-in-portable — it's written in a custom compiled `.dc.html`
+  DSL/class-component runtime, not JSX/hooks — so treat it as an
+  interaction/animation spec to reimplement in Framer Motion against
+  this codebase's real state, not code to copy-paste.
+  **Do not port anything else from `design/`:** its own playback engine,
+  monolithic state management, and simplified `sentences: string[]`
+  abstract shape are all superseded by what Tier 1/2 already built and
+  tested (real `usePlaybackEngine.ts`, Zustand/TanStack split, pinned
+  `AbstractSegment[]` shape) — reconciling them would be a downgrade,
+  not an upgrade. The design kit also has no "⚠ Retracted" badge (§13.4,
+  already implemented in the merged `StackScreen.tsx`) and gets §6.5's
+  mute mechanism wrong (cancels and re-speaks the current sentence
+  instead of a live in-place volume change) — don't carry either forward.
 - TanStack Query hooks point at real 3A endpoints instead of MSW.
 - Single decision function (§11.4): swipe (Framer Motion), tap/click,
   keyboard all call it; triggers optimistic update, `PATCH /decisions`,
