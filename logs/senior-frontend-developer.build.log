@@ -4,3 +4,453 @@ This file is the human's timesheet-equivalent for this agent role — read
 in place of a status meeting. Every entry follows the format described in
 this agent's system prompt (`.claude/agents/senior-frontend-developer.md`).
 Newest entries at the bottom. Do not delete or rewrite prior entries.
+
+[2026-07-04T00:00:00] TASK 2A — START
+Starting BuildPlan Task 2A (§11.1, §11.5, §11.6): vite-plugin-pwa
+manifest + service worker precache, the Zotero OAuth callback route
+shell, and a Lighthouse CI installability check. Depends only on Tier 0
+(scaffold + CONTRACTS.md), no Tier 1 backend implementation needed —
+confirmed no other agent logs exist yet to check for pivots. Owning
+frontend/src/main.tsx, vite.config.ts, frontend/src/routes/. Per §11.6,
+the callback route is the *one* real URL-based route (Zotero redirects
+the browser here after OAuth completes) — everything else is
+panel-toggle state within one SPA, so no React Router is being added;
+routing is a minimal manual pathname switch in main.tsx.
+
+[2026-07-04T00:05:00] TASK 2C — START
+Starting BuildPlan Task 2C (§11.2 state architecture): Zustand stores for
+local-only state (playback play/pause, mute, highlighted-sentence index,
+which panel is open, in-progress search-settings draft, cookie-consent
+dismissal) and a TanStack Query client + typed hooks for every §10.4
+endpoint. Read CONTRACTS.md in full (segmented-abstract shape, API error
+shape, Zotero push per-item shape) and fixtures/ (pubmed esearch/
+esummary/icite, zotero collections/item_creation) — CONTRACTS.md does not
+pin /search, /queue, /saved, /zotero/collections response shapes, so
+those are typed directly off SPEC.md §9.2's entity field names (Paper/
+QueueDecision) rather than invented ad hoc; MSW fixtures for those
+endpoints reuse the same PMIDs/titles/DOI-missing/citation-count/
+collection-key/item-creation-success-failure patterns as Task 0.3's
+fixtures rather than inventing new ones. Checked this log for prior Tier
+2 entries: only Task 2A's START exists so far (no completed dependency
+work to pivot against — 2C only depends on Tier 0). Depends on Tier 0
+only (scaffolding + CONTRACTS.md), no Tier 1 backend implementation
+needed. Owning frontend/src/state/ and frontend/src/api/. Installed
+@tanstack/react-query, zustand, and msw as new frontend deps (all
+free/open-source, consistent with §11.1's stack table).
+
+[2026-07-04T00:00:00] TASK 2B — START
+Building presentational screen components for SPEC.md §5.1-5.5 (Idle,
+Search & Settings, Stack, Empty-results, Saved List, Zotero push
+sub-flow) plus the §13.4 "Retracted" badge, driven entirely by
+hand-written fixture data (no TanStack Query, no network) per
+BuildPlan.md Task 2B. Depends only on Tier 0 (CONTRACTS.md, fixtures/) —
+no Tier 1 implementation needed. Read CONTRACTS.md (segmented-abstract
+shape, API error shape, Zotero push shape) and fixtures/README.md;
+CONTRACTS.md does not pin a queue/paper/saved-list JSON shape (that's
+Tier 3's job), so I'm building local fixture data under
+frontend/src/components/screens/ matching SPEC.md §9.2's Paper/
+QueueDecision fields, cross-referencing the same PMIDs used in
+fixtures/pubmed/*.json (38279812 normal, 38279813 retracted/no-DOI,
+37000001 non-English/language-mismatch) so later tasks recognize the
+same corpus. Per BuildPlan Tier 2's scope note and the 4A task
+description, swipe/Framer Motion gesture wiring is explicitly Task 4A's
+job (ties 2C/2D to 3A) — 2B implements only the tap/click/keyboard path
+of the single decision function's UI surface (buttons + key handlers),
+not the drag gesture itself. No other agent logs exist yet for 2A/2C/2D
+to cross-check against.
+
+[2026-07-04T00:10:00] TASK 2D — START
+Starting BuildPlan Task 2D (§6 all except tokenizer, §11.3, §13.2,
+§13.7): the isolated `usePlaybackEngine` module — per-sentence
+SpeechSynthesisUtterance queuing with the two pause-class gaps,
+mute-via-volume, timer-based fallback, onboundary as bonus-only, Screen
+Wake Lock while playing, and the one-time "no speech synthesis support"
+notice. Read CONTRACTS.md §1 (AbstractSegment/SegmentedAbstractResponse
+— pinned pause_class category only, not ms values) and checked 2A/2B/2C
+START entries above (no COMPLETE entries yet from any Tier 2 sibling, so
+nothing to pivot against; confirmed no Tier 1 backend work exists yet —
+correctly expected, since 1D lands in Tier 1 Wave 2 and this task is
+built against fixtures per BuildPlan). No pre-tokenized "segmented
+abstract" fixture exists yet under fixtures/ (only fixtures/tokenizer/
+abbreviation_corpus.json, which is raw-text-in/expected-sentences-out for
+1D's own tests) — as expected per my task brief, since 1D hasn't run.
+Building hand-written AbstractSegment[]-shaped fixture objects in this
+module's own test file, matching CONTRACTS.md's shape exactly, plus
+deriving spoken-text-only sentences from fixtures/tokenizer/
+abbreviation_corpus.json's `expected_sentences` for the abbreviation-
+correctness-adjacent assertions (never re-deriving the split myself from
+raw_text — I only consume the corpus's already-correct expected output
+as inert fixture strings). Owning frontend/src/playback/
+usePlaybackEngine.ts (+ colocated test file). Not touching
+frontend/src/state/, frontend/src/api/, frontend/src/components/screens/
+(2C/2B territory, currently mid-flight as uncommitted work in this
+worktree).
+
+[2026-07-04T01:15:00] TASK 2B — COMPLETE
+Did: presentational screen components for SPEC.md §5.1-5.5 plus §13.4's
+"⚠ Retracted" badge, entirely fixture-driven (no TanStack Query, no
+network):
+  - IdleScreen (§5.1) — wordmark, disabled saved-list affordance when
+    session has nothing saved.
+  - SearchSettingsPanel (§5.2) — controlled sort/read-aloud/default-
+    swipe/speed/format fields, disabled podcast option, blank-query
+    validation disabling Start, inline (non-blocking) loading spinner.
+  - StackScreen (§5.3) — title/abstract/metadata/next-up card, the ✕Skip/
+    ♥Interested tap buttons and Left/Right/Space/Up/Down keyboard
+    equivalents all routed through one `onDecide`/`onTogglePlay` callback
+    pair (§11.4/§13.1 — swipe drag itself is explicitly Task 4A's job per
+    BuildPlan, not 2B's), abstract collapsed until playback starts, ⚠
+    Retracted badge keyed off `publication_types` (§13.4), aria-live
+    region stub for screen-reader announcements.
+  - EmptyQueueState (§5.3a) — disabled play button, live search-retry
+    affordance only.
+  - SavedListPanel (§5.4) — per-item remove, Push to Zotero/Download CSV
+    (disabled when empty), Disconnect Zotero shown only when
+    `isZoteroConnected` (§9.6), retracted badge reused here too.
+  - ZoteroPushFlow (§5.5, all steps incl. offline "pending" variant and
+    Step 3b's connection-vs-push failure copy — this is the task's cited
+    "error" screen-state).
+  - SegmentedAbstract — renders `AbstractSegment[]` as one <span> per
+    segment (CONTRACTS.md §1 shape), highlight driven by a plain
+    `highlightedIndex` prop; never touches `dangerouslySetInnerHTML` or
+    builds an HTML string from paper text (§6.5/§11.3's hard XSS
+    requirement).
+  - Local types.ts + fixtures.ts: CONTRACTS.md pins the segmented-abstract/
+    error/Zotero-push shapes but not a queue/paper/saved-list response
+    shape (that's Tier 3/Task 3A's job) — built local fixture data
+    matching SPEC.md §9.2's Paper/QueueDecision fields, using the same
+    PMIDs as fixtures/pubmed/*.json (38279812 normal, 38279813
+    retracted+no-DOI, 37000001 language-mismatch) so it's recognizably
+    the same corpus once real endpoints land.
+Worked: 28/28 new tests green (§15.2) — per-screen-state rendering
+(idle/loading/empty-result §5.3a/error §5.5 step-3b), retracted-badge
+presence/absence, tap+keyboard decisions calling the identical `onDecide`
+callback, Disconnect Zotero gated on connection state, and the XSS
+regression test proving a malicious `<script>`/`<img onerror>` payload in
+title/abstract renders as literal escaped text (no `<script>`/`<img>`
+element in the DOM, no `window.__xss` side effect). `npx eslint
+src/components/screens` clean; `npm run typecheck` clean; `npm run build`
+succeeds (vite-plugin-pwa precache included, built by 2A concurrently).
+Pivot: hit a transient cross-agent race — 2C's `src/test/setup.ts` (the
+shared Vitest setupFiles entry) imports an MSW server that wasn't yet in
+node_modules mid-edit; a short retry after 2C's install finished resolved
+it, no change needed on my side. Also fixed one over-broad
+`getByText(matcherFn)` in my own XSS test that ambiguously matched both
+the `<span>` and its parent `<p>` — narrowed to `getByTestId("segment-0")`.
+Full-suite `npm run test` currently shows 3 failing tests in
+`src/playback/usePlaybackEngine.test.ts` (Task 2D's file, outside my
+ownership) — not touched, flagging for 2D/tester to pick up.
+Changed (all new files, all within owned `frontend/src/components/screens/`):
+frontend/src/components/screens/types.ts,
+frontend/src/components/screens/fixtures.ts,
+frontend/src/components/screens/SegmentedAbstract.tsx,
+frontend/src/components/screens/IdleScreen.tsx,
+frontend/src/components/screens/SearchSettingsPanel.tsx,
+frontend/src/components/screens/StackScreen.tsx,
+frontend/src/components/screens/EmptyQueueState.tsx,
+frontend/src/components/screens/SavedListPanel.tsx,
+frontend/src/components/screens/ZoteroPushFlow.tsx,
+frontend/src/components/screens/index.ts, and matching *.test.tsx for
+each component above.
+Open: none for 2B's own scope. Screens aren't yet wired into App.tsx/
+routing (2A's file) or into real TanStack Query/Zustand state (2C) or
+Framer Motion drag gestures (4A) — that wiring is explicitly later tasks'
+job per BuildPlan, not left undone by oversight.
+
+[2026-07-04T00:45:00] TASK 2C — COMPLETE
+Did: state architecture scaffolding (§11.2) and typed API layer for
+every §10.4 endpoint (§10.4, CONTRACTS.md).
+- src/state/: four Zustand stores, each owning exactly one slice of
+  §11.2's local-only-state list and nothing server-derived —
+  playbackStore (isPlaying/isMuted/highlightedSegmentIndex, the UI-facing
+  slice of §11.3's playback engine state — the engine itself, owned by
+  2D, is the only thing that ever calls speechSynthesis), panelStore
+  (which of search/stack/saved is open, §3.3), searchDraftStore
+  (in-progress Search & Settings edits pre-"Start", §5.2/§3.5, never
+  touching the backend until committed via useRunSearch), uiStore
+  (cookie-consent-notice dismissal, §10.2). Each store is tested via
+  direct getState()/setState() calls, no React rendering, per §15.2's
+  "store transitions in isolation."
+- src/api/: types.ts transcribes CONTRACTS.md's three pinned shapes
+  (segmented-abstract, ApiError, Zotero push per-item) verbatim, plus
+  types for /search, /queue, /saved, /zotero/collections which
+  CONTRACTS.md does NOT pin as of Task 0.2 — I typed those directly off
+  SPEC.md §9.2's Paper/QueueDecision/SearchSession field names rather
+  than inventing independent shapes, and flagged in a code comment
+  (zotero.ts) one gap I had to make a call on: §10.4 has no endpoint yet
+  for §9.6's "Disconnect Zotero" action, so useDisconnectZotero targets
+  DELETE /zotero/connection as the natural REST counterpart pending that
+  being added to §10.4 formally. client.ts is the one fetch wrapper (all
+  hooks go through it) — credentials:"include" only (session cookie,
+  never a secret per the project's no-client-secrets rule), parses
+  non-2xx bodies against CONTRACTS.md's {error:{code,message}} shape into
+  a typed ApiError, falls back to a safe internal_error on a malformed
+  error body (never surfaces raw response text). One hook file per
+  endpoint family (search.ts, queue.ts, abstract.ts, decisions.ts,
+  saved.ts, zotero.ts) using TanStack Query; useUpdateDecision and
+  useRemoveSaved implement §11.2's optimistic-update-then-reconcile
+  pattern explicitly (onMutate sets the queue/saved cache immediately,
+  onError rolls back, onSettled invalidates). MSW handlers
+  (api/mocks/handlers.ts, server.ts) are seeded from fixtures.ts, which
+  reuses Task 0.3's exact PMIDs/titles/DOI-missing/citation-null/
+  retracted/Zotero-collection-key/item-creation-success-failure values
+  (reshaped into the LitList response envelope the frontend actually
+  consumes, since the raw PubMed/Zotero fixture shapes are backend-only)
+  rather than inventing new fixture data — documented in fixtures.ts's
+  header comment.
+- Added a global MSW server lifecycle (beforeAll/afterEach/afterAll) to
+  the shared src/test/setup.ts so every test file gets mocked network
+  calls for free; this file isn't in 2C's exclusive "owns" list but no
+  other agent had touched it yet at time of edit, and the addition is
+  purely additive test infra.
+Worked: 34/34 tests green across src/state (4 store test files, no React
+rendering) and src/api (7 hook/client test files against MSW, incl.
+optimistic-update-then-rollback and the zotero_not_connected error-code
+path). `npx eslint src/state src/api --max-warnings 0` clean.
+`npm run typecheck` (tsc -b --noEmit, whole project) clean. `npm run
+build` (tsc -b && vite build) succeeds. Full-repo `npm run test` shows
+2 unrelated pre-existing failures in src/playback/usePlaybackEngine.test.ts
+(Task 2D's in-progress file, untracked, not touched by me) — confirmed
+these are outside my scope and not introduced by this work.
+Changed: frontend/src/api/ (new: types.ts, client.ts, queryClient.ts,
+queryKeys.ts, search.ts, queue.ts, abstract.ts, decisions.ts, saved.ts,
+zotero.ts, index.ts, testUtils.tsx, mocks/fixtures.ts, mocks/handlers.ts,
+mocks/server.ts, and one *.test.ts(x) per hook file + client.test.ts);
+frontend/src/state/ (new: playbackStore.ts, panelStore.ts,
+searchDraftStore.ts, uiStore.ts, index.ts, and one *.test.ts per store);
+frontend/src/test/setup.ts (added MSW lifecycle); frontend/package.json,
+frontend/package-lock.json (added @tanstack/react-query, zustand, msw —
+all free/open-source, per §11.1's stack table).
+Open: the /zotero/connection DELETE endpoint I typed against is a call I
+had to make (flagged above and in zotero.ts) since §10.4 doesn't list it
+yet — worth confirming/adding to CONTRACTS.md or §10.4 in a later task
+rather than leaving it only as a frontend-side assumption. No other
+blockers; ready for 2B (screens) and 2D (playback engine) to consume
+these hooks/stores once they're further along.
+
+[2026-07-04T00:45:00] TASK 2D — PIVOT
+Two implementation calls made, both flagged rather than decided
+silently:
+1. Pause-class -> millisecond mapping (structural ~900ms, sentence
+   ~250ms, scaled by 1/speed) lives in this module, not the backend.
+   CONTRACTS.md §1 only pins the *category* (`pause_class`); SPEC.md
+   §6.4 explicitly leaves the exact ms value to "implementation/
+   testing," and Speed is local-only client state (§11.2) the backend
+   never sees — so the category->ms->speed-scaled-gap conversion has to
+   happen here. This is not re-deriving tokenization or which category a
+   gap belongs to (still 1D's exclusive job) — only converting an
+   already-decided category into an actual timer duration.
+2. §11.2 (mute is Zustand-owned local state) vs §11.3 ("engine exposes
+   toggleMute()") read as in tension. Resolved by having the hook accept
+   `muted`/`speed` as reactive *inputs* (props) rather than re-declaring
+   them as the hook's own state — so the boolean still lives in exactly
+   one place (wherever the caller's Zustand store puts it), and the
+   engine's only job is applying it to `utterance.volume` live. Also hit
+   a newer `eslint-plugin-react-hooks` v7 rule ("no ref access during
+   render") that the initially-written mutable-ref-sync-in-render-body
+   pattern (`itemsRef.current = items` directly in the hook body) tripped
+   on 8 times — moved every such sync into its own `useEffect`, no
+   product-behavior change, all internal to this file.
+3. Title/metadata line text has no pinned CONTRACTS.md shape yet (that's
+   Tier 3's job) — kept `PlaybackItem` deliberately generic (`key` +
+   `spokenText` + `pauseClass`) so the engine has zero opinion on where
+   an item came from; whatever assembles [title, metadata, ...abstract
+   segments] (a later integration task) maps CONTRACTS.md's
+   `AbstractSegment` plus the eventual title/metadata shape onto this
+   list.
+
+[2026-07-04T00:50:00] TASK 2D — COMPLETE
+Did: `usePlaybackEngine` (§6 all except tokenizer, §11.3, §13.2, §13.7) —
+per-sentence utterance queuing via explicit onend-chained `.speak()`
+calls (never relying on the browser's own utterance queue), the two
+pause-class gaps converted to speed-scaled ms, mute-via-`volume`
+live-applied to the in-flight utterance without touching the clock,
+`onboundary` deliberately left unused (bonus-only per §6.5 — no
+sub-sentence precision layer was needed to satisfy this task's tests, so
+none was added; flagging as a possible follow-up rather than building it
+speculatively), the timer-based fallback for missing/throwing
+speechSynthesis, a generation-counter guard so cancel()/pause() make any
+in-flight timer or utterance callback a no-op, Screen Wake Lock requested
+on play() and released on pause()/cancel()/finish()/unmount, and the
+one-time dismissible "audio narration isn't available" notice. Built and
+tested entirely against hand-written `PlaybackItem[]` fixtures shaped
+like CONTRACTS.md §1's `AbstractSegment` (no pre-tokenized fixture
+existed yet, as expected since 1D hasn't run) via a fully injectable
+`PlaybackEngineEnv` (manual FIFO timer queue, fake/absent synth, mocked
+wake lock) — no real timers, no real SpeechSynthesis needed.
+Worked: all 5 cited §15.9 cases green plus 3 more (unsupported-notice
+shown/dismissed/absent-when-supported) — 8/8 tests in
+usePlaybackEngine.test.ts passing: timer-fallback actually exercised
+(fired step-by-step through 3 items to a real `finished` state, not just
+present in code); mute advances the highlight on the identical schedule
+as unmuted (asserted equal scheduled gap ms across two independent runs,
+only `utterance.volume` differing) plus a separate live-toggle-mid-
+utterance case; speed scaling verified on both the fallback-timer
+duration (2x speed -> half duration) and the real-utterance `rate`
+field; mid-narration cancellation verified to make a late/stale `onend`
+a no-op (no second `speak()` call, no state change) after `cancel()`;
+Wake Lock requested once on `play()` and released on `cancel()`. Full
+frontend suite: 21 files / 81 tests passing (`npx vitest run`), `npx
+eslint src/playback/` clean, `npx tsc -b --noEmit` clean (module-scoped;
+one unrelated pre-existing error in 2B's in-flight
+`ZoteroPushFlow.test.tsx` was present during an earlier typecheck pass
+and has since cleared as that agent's work landed), `npm run build`
+green end-to-end.
+Changed: frontend/src/playback/types.ts (new),
+frontend/src/playback/usePlaybackEngine.ts (new),
+frontend/src/playback/usePlaybackEngine.test.ts (new). No files outside
+frontend/src/playback/ touched.
+Open: this module is not yet wired into any screen component (that's a
+later integration task, per BuildPlan — 2B/2C are building the UI/state
+layers concurrently and will need to assemble the real
+[title, metadata, ...AbstractSegment] `PlaybackItem[]` list once the
+title/metadata shape lands from Tier 3). `onboundary` word-level bonus
+precision (§6.5) intentionally not implemented — flagged above as a
+scope call, not an oversight, since no cited test required it and adding
+it speculatively risked exactly the kind of untested surface §15.9
+warns against.
+
+[2026-07-04T00:45:00] TASK 2A — PIVOT
+Two pivots worth flagging:
+1. Concurrent npm installs (mine adding vite-plugin-pwa/@lhci/cli,
+   2C adding msw/@tanstack/react-query, 2C adding zustand) raced in the
+   shared frontend/node_modules and produced a broken path-to-regexp
+   resolution, then a plain `npm install` I ran to fix it pruned
+   msw/@tanstack/react-query/zustand entirely because they weren't yet
+   saved to package.json at that moment. Fixed by re-adding all three
+   (`@tanstack/react-query`, `zustand` as dependencies; `msw` as
+   devDependency) based on what 2C's already-written source files
+   (src/api/*, src/state/*) actually import, then re-verified with
+   `npm ls` that each dependency tree now carries its own
+   non-conflicting path-to-regexp. Full suite green afterward (81/81).
+   Flagging for 2C/2D to double check their intended versions match
+   what got restored (@tanstack/react-query ^5.101.2, zustand ^5.0.14,
+   msw ^2.14.6 — latest at install time, not pinned to anything they'd
+   specified since I had no record of their intended versions).
+2. SPEC.md §15.5 assumes Lighthouse CI's PWA-installability audits
+   (installable-manifest, service-worker, etc.) still exist. They don't:
+   Lighthouse v12+ (bundled with the current @lhci/cli@0.15.1) removed
+   the entire `pwa` category/audits outright (Chrome's underlying
+   installability-error API was deprecated). Rather than silently
+   substituting a from-scratch custom check for what SPEC calls "Lighthouse
+   CI", pinned `@lhci/cli@0.13.0` (bundles Lighthouse 11.4.0, last version
+   with the PWA category intact) so the actual named tool still runs and
+   asserts the real installability criteria. Flagging this version pin
+   explicitly for Task 5B (CI integration) to confirm/revisit — it's a
+   real upstream deprecation, not a workaround I should quietly leave
+   undocumented.
+
+[2026-07-04T00:50:00] TASK 2A — COMPLETE
+Did: BuildPlan Task 2A (§11.1, §11.5, §11.6).
+- vite-plugin-pwa wired into vite.config.ts: app-shell-only precache
+  (globPatterns js/css/html/svg/png/ico/woff2, §11.5's explicit
+  exclusion of PubMed/paper data from the service worker — that stays
+  server-cached per §9.2/TanStack Query's in-memory cache, Task 2C),
+  manifest (name/icons/theme_color/display:standalone). Generated actual
+  PWA icons (192/512/512-maskable PNG) from a placeholder brand SVG
+  (public/pwa-icon-source.svg) since no real design assets exist yet —
+  flagging these as placeholders for whenever real branding lands.
+  Added <meta name="theme-color"> and apple-touch-icon link to
+  index.html (needed for the themed-omnibox/apple-touch audits).
+- Zotero OAuth callback route shell (§8.2 steps 3-4, §11.6): the one
+  real URL-based route in the app. Implemented as manual pathname-based
+  routing (no React Router, per §11.6's explicit reasoning) in
+  src/routes/Root.tsx, rendering src/routes/ZoteroCallbackRoute.tsx at
+  the fixed path /oauth/zotero/callback (src/routes/paths.ts). UI/UX
+  call flagged in-code (SPEC.md/CONTRACTS.md don't pin this redirect's
+  query-param shape since backend Task 3B doesn't exist yet): assumed
+  `?status=success` / `?status=error&code=...&message=...`, reusing the
+  ApiError code/message fields already pinned in CONTRACTS.md #2 rather
+  than inventing a new shape — flagged for whoever builds 3B/Tier 4 to
+  confirm. This is a shell only: real hand-off into Screen D1 Step 2
+  (collection selection) is explicitly left for Tier 4 once 2C's
+  Zustand panel store is available; a comment marks exactly where.
+  parseCallbackParams split into its own module
+  (zoteroCallbackParams.ts) to satisfy the fast-refresh-only-exports
+  lint rule.
+- Lighthouse CI (§15.5): lighthouserc.json (frontend/lighthouserc.json)
+  runs against the built `dist/` (staticDistDir), asserting
+  installable-manifest + viewport as hard errors and
+  maskable-icon/themed-omnibox/splash-screen/content-width as warnings.
+  Added `npm run lighthouse` script (build + `lhci autorun`). Confirmed
+  working locally: `npm run lighthouse` → all assertions pass, PWA
+  category score 1.0 after the theme-color meta tag fix. For Task 5B's
+  CI wiring: this needs a real Chrome/Chromium available in the runner
+  (works via chrome-launcher locating a local install here) and
+  currently uploads to LHCI's default "temporary-public-storage" target
+  (Google's free public bucket) — fine for local runs, worth deciding in
+  5B whether CI should instead use the `filesystem` upload target to
+  avoid an external dependency for stored reports.
+Worked: full suite green — `npm run typecheck` (0 errors),
+`npm run lint` (0 errors/warnings, --max-warnings 0), `npm run build`
+(manifest.webmanifest + sw.js generated correctly), `npm run test --
+--run` (21 files / 81 tests passed, including my 3 files' 11 tests:
+ZoteroCallbackRoute.test.tsx param-parsing + rendering + no-raw-HTML
+regression + navigation, Root.test.tsx routing, App.test.tsx smoke),
+`npm run lighthouse` (LHCI collect+assert all green).
+Changed: frontend/vite.config.ts, frontend/index.html,
+frontend/src/main.tsx, frontend/src/routes/paths.ts (new),
+frontend/src/routes/Root.tsx (new), frontend/src/routes/Root.test.tsx
+(new), frontend/src/routes/ZoteroCallbackRoute.tsx (new),
+frontend/src/routes/ZoteroCallbackRoute.test.tsx (new),
+frontend/src/routes/zoteroCallbackParams.ts (new),
+frontend/lighthouserc.json (new), frontend/public/pwa-icon-source.svg
+(new), frontend/public/pwa-192x192.png (new),
+frontend/public/pwa-512x512.png (new),
+frontend/public/pwa-512x512-maskable.png (new), frontend/package.json
+(vite-plugin-pwa, @lhci/cli@0.13.0 pinned, @tanstack/react-query,
+zustand, msw added/restored), frontend/package-lock.json,
+frontend/.gitignore (.lighthouseci ignored).
+Open: real OAuth wiring (backend redirect shape, Tier 4 hand-off into
+collection selection) is out of scope here as planned — flagged inline
+for whoever picks it up. @lhci/cli pinned to 0.13.0 instead of latest;
+Task 5B should revisit if/when Lighthouse restores PWA audits upstream
+or an alternative check is preferred.
+
+[2026-07-04T01:10:00] TASK 2D — PIVOT (post-review fix)
+Adversarial review (logs/adversarial-generalist.build.log, "TASK 2D
+REVIEW") found a real, 100%-reproducible re-entrancy bug: `play()`
+guarded re-entrancy on the `status` *state* value
+(`if (status === "playing") return;`), but React state doesn't commit
+synchronously within the same tick — two synchronous `play()` calls in
+one tick (double-tap, two fast Space keypresses handled in the same
+event) both closed over the same not-yet-committed `status` and both
+passed the guard, so `env.synth.speak()` was called twice for the same
+item (audibly duplicated narration). The generation-counter ref
+correctly stopped the *stale* utterance's onend/onerror from corrupting
+highlight/finished state afterward, but did nothing to prevent the
+second real `speak()` call itself, since both synchronous calls bumped
+from and captured the same pre-bump generation. Root cause confirmed by
+reverting to the old guard and re-running the new regression test: it
+failed exactly as predicted (2 speak() calls instead of 1, then 3 for a
+triple-call variant), then restored and re-verified passing.
+Fix: added a `statusRef` (a plain ref) as the synchronous source of
+truth for `play()`/`pause()`'s re-entrancy guards, updated via a
+`setStatusBoth()` helper that writes the ref and calls `setStatus()`
+together on every transition (finish/play/pause/cancel) — `status`
+(state) is now purely for driving UI re-renders, never read for a
+correctness-critical guard. Also added a code comment on the
+fire-and-forget `requestWakeLock().then()` in `play()` addressing the
+reviewer's separate, unresolved finding (tester's "TASK 2B VERIFY"
+mute-test flake hypothesis blaming this promise): confirmed by
+inspection this callback only ever writes a plain ref or calls
+`lock?.release()`, never touches React state, so it cannot be the
+direct cause of a `currentKey`-assertion flake — left as documented and
+open per the reviewer's own inconclusive 200+256-iteration repro
+attempt, not silently closed.
+Worked: added two regression tests under a new "play() re-entrancy"
+describe block in usePlaybackEngine.test.ts — `act(() => { play();
+play(); })` and a triple-call variant — both assert `speak()` called
+exactly once. Confirmed both fail on the pre-fix guard (2/3 calls) and
+pass on the fix (1 call). Full suite after the fix: 10/10 in
+usePlaybackEngine.test.ts, 83/83 across the whole frontend suite (up
+from 81, the 2 new tests), `npx eslint src/playback/` clean, `npx tsc -b
+--noEmit` clean, `npm run build` green.
+Changed: frontend/src/playback/usePlaybackEngine.ts (statusRef +
+setStatusBoth, guard fix, wake-lock comment),
+frontend/src/playback/usePlaybackEngine.test.ts (2 new regression
+tests). No other files touched.
+Open: the intermittent mute-test flake from TASK 2B VERIFY remains
+unexplained (not a merge blocker per the coordinator) — documented in
+code and in this log for whoever picks it up next; no root cause
+identified by either this agent or the adversarial reviewer.

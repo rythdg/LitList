@@ -4,3 +4,524 @@ This file is the human's timesheet-equivalent for this agent role — read
 in place of a status meeting. Every entry follows the format described in
 this agent's system prompt (`.claude/agents/senior-backend-developer.md`).
 Newest entries at the bottom. Do not delete or rewrite prior entries.
+
+[2026-07-04T00:00:00] TASK 1A — START
+Starting BuildPlan.md Task 1A (Data model & session identity), SPEC.md §9
+(all) and §10.2. Read logs/creds.log (confirms TOKEN_ENCRYPTION_KEY /
+SESSION_COOKIE_SECRET are agent-generated dev placeholders, not to be
+requested from the human) and CONTRACTS.md (error shape, though not
+directly consumed by this task). No prior senior-backend-developer log
+entries existed — this is the first. Building SQLModel entities (Session,
+ZoteroConnection, SearchSession, Paper, QueueDecision, ZoteroExport) under
+backend/app/models/, plus backend/app/middleware/session.py (cookie
+issuance + the request-token-to-session OAuth binding primitive Task 1C
+will import). Scope: backend/app/models/, backend/app/middleware/session.py,
+plus backend/.env.example (documentation only, no secret values committed)
+and backend/app/config.py (new settings fields) — not touching main.py,
+which is Task 3D's job per BuildPlan.md line ~799.
+
+[2026-07-04T00:45:00] TASK 1A — PIVOT
+Two architectural calls not fully pinned by SPEC.md/BuildPlan.md, made
+explicit here rather than silently:
+1. `SessionIdentityMiddleware` is written as a plain ASGI middleware
+   (`__call__(scope, receive, send)`), not `starlette.middleware.base.
+   BaseHTTPMiddleware` — the latter has well-documented issues with
+   streaming responses/background tasks in this Starlette version, and
+   §10.4's CSV export (`GET /api/v1/export.csv`, §8.8) will need to stream
+   later. Avoiding the footgun now is cheaper than migrating later.
+2. The OAuth request-token-to-session binding primitive (§10.2's addendum)
+   is an in-process dict with a TTL, not a DB table. §10.2 explicitly
+   allows either ("a short-lived row/cache entry"); given §10.6's no-Redis/
+   no-background-queue stance and §12.2's single always-on backend process,
+   in-process is the simpler choice with an identical security property
+   (bound to session, single-use, short TTL). Documented in
+   `OAuthSessionBinding`'s docstring, including the explicit caveat that
+   this stops being correct if the backend ever runs multiple worker
+   processes.
+Also: interpreted BuildPlan's "generate this yourself... and document it in
+backend/.env.example" for TOKEN_ENCRYPTION_KEY/SESSION_COOKIE_SECRET as
+"document how to generate it, don't commit actual key material to git" —
+committing real key bytes (even framed as a dev placeholder) into a
+git-tracked file conflicts with "secrets never appear in code" as a general
+principle. Instead: `.env.example` documents the exact one-line command to
+generate each value locally, and both `app/models/crypto.py` and
+`app/middleware/session.py` fall back to a loudly-logged ephemeral
+per-process key when the env var is unset, so a fresh checkout/CI run still
+boots and passes tests with zero setup, at the documented cost of not
+surviving a process restart in that fallback mode.
+
+[2026-07-04T01:10:00] TASK 1A — COMPLETE
+Did: BuildPlan.md Task 1A — SQLModel entities (Session, ZoteroConnection,
+SearchSession, Paper, QueueDecision, ZoteroExport, SPEC.md §9.2), CSPRNG
+session_id generation (`secrets.token_urlsafe(32)`) + rotation-on-Zotero-
+connect (`rotate_session`, §9.1), Fernet encryption for
+oauth_token/oauth_token_secret keyed by TOKEN_ENCRYPTION_KEY (§9.6),
+SessionIdentityMiddleware with signed-cookie issuance (§10.2), and the
+OAuthSessionBinding request-token-to-session primitive (§10.2's OAuth
+addendum) that Task 1C will import.
+Worked: full backend suite green — `pytest -q` => 21 passed (4 pre-existing
+Task 0.1 tests + 17 new: 5 in test_crypto.py covering Fernet round-trip +
+independent-key/cross-decryption-fails assertions per §15.1, 6 in
+test_oauth_session_binding.py covering match/mismatch/replay/expiry, 3 in
+test_session_identity.py covering CSPRNG-source assertion + rotation
+migrating every FK-linked row, 3 in test_session_middleware.py covering
+cookie issuance/reuse/tamper-rejection end-to-end via TestClient). `ruff
+check .` => all checks passed (had to fix UP042 str+Enum -> StrEnum, B017
+blind-Exception assert, one import-sort issue — all clean now). `mypy
+app/` => success, no issues (fixed one unused type:ignore). Did not run
+mypy against tests/ as a gate since the existing test_db.py already isn't
+strict-mypy-clean (untyped fixture args, app.db re-export shape) — matches
+this repo's existing convention of not holding test files to `mypy --strict`,
+confirmed by inspecting Task 0.1's own test file rather than assuming.
+Changed: backend/app/models/__init__.py, entities.py, ids.py, identity.py,
+crypto.py (all new except __init__.py); backend/app/middleware/session.py
+(new); backend/app/config.py (added token_encryption_key/
+session_cookie_secret settings); backend/.env.example (generation
+instructions, no secret values committed); backend/tests/conftest.py
+(new db_engine fixture), test_crypto.py, test_oauth_session_binding.py,
+test_session_identity.py, test_session_middleware.py (all new).
+Open: main.py wiring (installing SessionIdentityMiddleware, CORS, inbound
+rate limiting into the actual app) is explicitly Task 3D's job per
+BuildPlan.md — not touched here. Task 1C should import
+`app.middleware.session.oauth_session_binding` and
+`app.models.rotate_session`/`app.models.encrypt_token`/`decrypt_token`
+directly rather than reimplementing any of this. Ready to merge before
+Wave 2 starts.
+
+[2026-07-04T02:00:00] TASK 1C — START
+Starting BuildPlan.md Task 1C (Zotero client & OAuth handshake), SPEC.md §8
+(all), plus §10.2's OAuth-binding addendum and §9.6. Read Task 1A's log
+(merged) and `backend/app/middleware/session.py` in full — confirmed
+`OAuthSessionBinding`/`oauth_session_binding` exists exactly as described
+(in-process, single-use, TTL-based, keyed by request_token -> (session_id,
+request_token_secret, expires_at)); using it as-is, not reimplementing.
+Read CONTRACTS.md's Zotero-push shape (§3) and both fixtures/zotero/*.json
+files (collections_response.json, item_creation_response.json — the
+latter's partial-batch-failure shape maps 1:1 to pyzotero's
+create_items()/create_collections() raw response format). Read
+logs/creds.log: ZOTERO_CLIENT_KEY/SECRET are REQUESTED, not received —
+proceeding fully mocked per the task brief, not blocking on them. Scope:
+backend/app/integrations/zotero.py, backend/app/auth/oauth.py (new), plus
+small additive settings in backend/app/config.py (zotero_client_key/
+secret/callback_url/post_auth_redirect_url) and backend/.env.example
+documentation, and a new `responses` dev dependency in pyproject.toml
+(see PIVOT note below) — not touching main.py or any route handlers,
+which are Task 3B's job.
+
+[2026-07-04T02:05:00] TASK 1C — PIVOT
+SPEC.md §15.7 says the OAuth handshake's automated tests should use
+"`respx` stubbing `/oauth/request`, `/oauth/authorize`, `/oauth/access`."
+In reality, `respx` only intercepts `httpx` traffic, and §8.1 pins
+`requests-oauthlib` (built on the `requests` library, not `httpx`) as the
+OAuth 1.0a client specifically because it's the natural/best-suited choice
+for this dated OAuth version — so `respx` cannot see these calls at all;
+this is an internal inconsistency in the spec's own tool choices, not a
+case of external-API drift. Fix: added `responses` (MIT, free/open-source,
+the `requests`-equivalent of `respx`) as a dev dependency and used it to
+stub the three real Zotero OAuth URLs at the HTTP layer, preserving the
+spirit of "stub the OAuth provider's endpoints over the wire" that §15.7
+actually wants, rather than mocking at the Python-method level (which
+would test less of the real request-signing/parsing path). Also
+discovered `pyzotero`'s `create_items`/`create_collections` already
+implement `Backoff`/`Retry-After` handling internally (`_check_backoff`/
+`_set_backoff`/`error_handler` in `pyzotero._client`/`.errors`) — so
+`zotero.py` does not need to reimplement §8.7's backoff pacing itself,
+only translate pyzotero's per-item success/failure maps (and any raised
+exception for a whole failed batch call) into CONTRACTS.md's per-PMID
+`ZoteroPushResult` shape.
+
+[2026-07-04T09:00:00] TASK 1B — START
+Starting BuildPlan.md Task 1B (PubMed client), SPEC.md §7 (all), plus the
+§13.4 extraction note (retracted-flag/Language capture) and §15.1/§15.8's
+outbound-pacing test requirements. Read Task 1A's log (this file, above):
+confirms `app/models/entities.py`'s `Paper` table (§9.2) exists but has no
+columns yet for `language`/`publication_type`/retracted — noted as a
+known gap to flag rather than silently work around (see PIVOT below).
+Also confirms `app/config.py` is a shared, additively-edited file (1A
+already added session/Zotero settings there) and Task 1C is concurrently
+adding its own Zotero settings to the same file — I'm only adding
+NCBI_API_KEY/NCBI_TOOL/NCBI_EMAIL fields, additive, no overlap expected.
+Scope for this task: `backend/app/integrations/pubmed.py`,
+`backend/app/integrations/icite.py` (both new), plus an additive
+`app/config.py` change for NCBI settings and two new test files
+(`tests/test_pubmed_client.py`, `tests/test_icite_client.py`). Not
+touching `app/models/`, `app/auth/`, `app/routes/`, or any other Wave-2
+sibling's files.
+
+[2026-07-04T09:10:00] TASK 1B — PIVOT
+Two things worth flagging explicitly rather than silently deciding:
+1. `app/models/entities.py`'s `Paper` table (Task 1A, merged) has no
+   columns for EFetch's `Language`/`PublicationType`/retracted-flag data
+   yet. BuildPlan.md's 1B scope is explicitly "Owns: pubmed.py, icite.py"
+   only — not `app/models/`. Rather than reach into a file outside my
+   scope to add columns, `pubmed.py`'s `EFetchArticle` dataclass captures
+   `language`, `publication_types`, and a derived `retracted: bool` as
+   plain return values; persisting these into the `Paper` cache (adding
+   whatever columns are needed) is left to whichever later task actually
+   populates that cache from this client (Task 3A's core-loop endpoints,
+   per BuildPlan.md's Tier 2/3 split) — flagging here so 3A knows the data
+   is available from this client today, it just isn't in the DB schema
+   yet.
+2. SPEC.md §7.9 describes the rate-limit error as a JSON body
+   `{"error": "API rate limit exceeded"}` without pinning an HTTP status
+   code. Real NCBI E-utilities behavior (per NCBI's own docs and observed
+   practice) returns HTTP 429, typically with a `Retry-After` header, on
+   rate-limiting — trusted as the primary signal in `pubmed.py`'s `_get`,
+   with the JSON-body match kept only as a secondary/defensive check (also
+   handles a non-429 status carrying that body, belt-and-suspenders).
+   Documented inline in `_get`'s docstring per the "trust the real API,
+   say so explicitly" instruction.
+
+[2026-07-04T09:24:00] TASK 1B — COMPLETE
+Did: `pubmed_client` (ESearch/ESummary/EFetch, §7.2-7.5) and NIH `icite`
+client (§7.6) as async wrapper clients, both server-side-only per §10.5.
+Outbound pacing via an injectable-clock `RateLimiter` (§7.7 — 10 req/s
+with NCBI_API_KEY configured, 3 req/s without) shared across all three
+E-utility calls on one `PubMedClient` instance. 429/`Retry-After` backoff
+with a bounded retry count (default 3), also driven by the injectable
+clock so no test sleeps real wall-clock time. Zero-result handling (§7.9,
+empty `pmids` short-circuits before any ESummary/EFetch call is even
+possible). Malformed/missing-individual-record handling (§7.9): ESummary
+skips a uid with no DocSum; EFetch skips a `<PubmedArticle>` with no
+parseable `<PMID>` — in both cases the rest of the batch still returns.
+§13.4 extraction: `EFetchArticle.language`, `.publication_types`, and a
+derived `.retracted` bool (substring match on "retract"/"retraction",
+case-insensitive, against PublicationType strings) are captured and
+returned, ready for Task 1D (language mismatch) and Task 2B (retracted
+badge) to consume once whichever task persists them into the `Paper`
+cache does so (see PIVOT above — not this task's file scope). iCite
+client (§7.6) never raises on failure — `fetch_citation_counts` always
+returns an `ICiteResult(available: bool, counts: dict)`, `available=False`
+on connection error/5xx/malformed JSON, so callers can degrade the
+Citations sort to Relevance rather than the whole search failing.
+Worked: `pytest -q` on the full backend suite => 41 passed (21
+pre-existing + 20 new: 15 in test_pubmed_client.py covering ESearch/
+ESummary/EFetch fixture parsing, zero-results, missing-DOI, malformed-
+record skip-without-failing-batch, retracted-flag + language extraction,
+fake-clock pacing (asserted exact virtual elapsed time, zero real sleep),
+mocked 429->Retry-After->success backoff, retries-exhausted ->
+PubMedUnavailableError, and network-error -> PubMedUnavailableError; 5 in
+test_icite_client.py covering fixture parsing including iCite's
+documented per-PMID coverage gap, empty-input short-circuit, and
+graceful degradation on connection error/5xx/malformed JSON). `ruff
+check .` => all checks passed (fixed two E501 line-length issues along
+the way). `mypy app/integrations/pubmed.py app/integrations/icite.py
+app/config.py` => success, no issues; `mypy app/` project-wide shows one
+pre-existing `no-any-return` error in `app/auth/oauth.py`, which is Task
+1C's file (concurrent Wave-2 sibling, not touched by me) — not this
+task's responsibility to fix, flagged here for visibility only.
+Changed: backend/app/integrations/pubmed.py, icite.py (both new);
+backend/tests/test_pubmed_client.py, test_icite_client.py (both new);
+backend/app/config.py (additive: ncbi_api_key/ncbi_tool/ncbi_email
+settings, no other lines touched).
+Open: persisting `EFetchArticle.language`/`publication_types`/`retracted`
+into the `Paper` DB cache (schema change + write path) is left for
+whichever later task actually populates `Paper` rows from this client —
+flagged explicitly above rather than assumed. No other blockers; live
+NCBI_API_KEY/NCBI_EMAIL credentials were not needed and not requested,
+per the task brief — all tests are respx-mocked against Task 0.3's
+fixtures in fixtures/pubmed/.
+
+[2026-07-04T02:40:00] TASK 1C — COMPLETE
+Did: BuildPlan.md Task 1C — Zotero OAuth 1.0a handshake
+(`backend/app/auth/oauth.py`) using `requests-oauthlib`'s `OAuth1Session`
+against the real Zotero endpoints (`/oauth/request`, `/oauth/authorize`,
+`/oauth/access`), with a fixed non-dynamic `zotero_callback_url`
+(server-config-only, §8.2's open-redirect fix — `start_handshake`/
+`post_auth_redirect_url` take no caller-supplied redirect argument at
+all) and Task 1A's `oauth_session_binding` used as-is for the
+request-token-to-session binding (§10.2 addendum). Plus the
+`pyzotero`-backed client wrapper (`backend/app/integrations/zotero.py`):
+`list_collections` (§8.4, follows `Link: rel="next"` pagination via
+pyzotero's `everything()`), `create_collection` (§8.5), and `push_items`
+(§8.6/§8.7 — chunks into batches of 50, translates pyzotero's raw
+success/failed index maps into CONTRACTS.md's exact per-PMID
+`ZoteroPushResult` shape, and treats a whole-batch exception as every
+paper in that batch failing rather than raising past the caller). All
+`pyzotero`/`requests-oauthlib` calls are synchronous under the hood, so
+every public function here is `async def` and dispatches through
+Starlette's `run_in_threadpool` to keep the event loop unblocked.
+Confirmed by reading pyzotero's actual source that its
+`create_items`/`create_collections` already implement §8.7's
+`Backoff`/`Retry-After` handling internally, so `zotero.py` does not
+duplicate that pacing logic.
+Worked: `pytest -q` (full backend suite) => 57 passed, including 16 new
+in `tests/test_oauth.py` (binding enforced/mismatched/expired/replay
+rejected, fixed-callback assertion via decoded Authorization header,
+provider-unreachable and missing-client-credentials paths) and
+`tests/test_zotero.py` (collections pagination, collection creation,
+partial-batch-failure against `fixtures/zotero/item_creation_response.json`
+verbatim, exact §8.6 item-shape assertion, 50-item batch chunking over
+120 papers -> [50,50,20], whole-batch-exception failure path, empty-list
+no-op) — covers SPEC.md §15.1/§15.7's automated half in full. `ruff check
+.` => all checks passed. `mypy app/` => success, no issues (21 source
+files). Did not run a live OAuth handshake against real Zotero —
+ZOTERO_CLIENT_KEY/SECRET remain REQUESTED-but-not-received per
+logs/creds.log; `start_handshake` raises a clean `ZoteroOAuthProviderError`
+if they're unset (tested), so a fresh checkout still boots. A real
+sandbox smoke test (§15.7's manual half) is still open and belongs to
+Task 6C, or an ad hoc manual check once the human drops real values into
+`backend/.env`.
+Changed: backend/app/auth/oauth.py (new), backend/app/integrations/zotero.py
+(new), backend/tests/test_oauth.py (new), backend/tests/test_zotero.py
+(new). Additive-only edits (to avoid clobbering concurrent Wave-2 work):
+backend/app/config.py (zotero_client_key/secret/callback_url/
+post_auth_redirect_url settings — 1B's own ncbi_* settings were already
+present alongside these when I checked afterward, no conflict),
+backend/.env.example (documented the same four vars), backend/pyproject.toml
+(added `responses>=0.25` as a dev dependency — see this task's PIVOT
+entry for why), backend/app/auth/__init__.py (was an empty scaffold
+placeholder; gave it a real module docstring).
+Open: Task 3B still needs to wire actual FastAPI routes
+(`/zotero/auth/start`, `/zotero/auth/callback`, `/zotero/collections`,
+`/zotero/push`) on top of `app.auth.oauth`/`app.integrations.zotero`,
+including persisting `ZoteroConnection` (encrypting via
+`app.models.crypto.encrypt_token`, rotating the session via
+`app.models.rotate_session`, per Task 1A's docstrings) and
+`ZoteroExport` rows per successful push. Live Zotero credentials still
+pending from the human (logs/creds.log) — not a blocker for merge.
+
+[2026-07-04T13:00:00] TASK 1D — START
+Starting BuildPlan.md Task 1D (Text normalization & sentence tokenizer),
+SPEC.md §6.3 (normalization pipeline), §6.4 (pause timing), §6.5
+(abbreviation-aware tokenizer), §13.3 (language-mismatch flag), plus
+CONTRACTS.md §1 (segmented-abstract response — pinned `AbstractSegment`/
+`SegmentedAbstractResponse` shape, including the just-fixed 0-indexed
+end-exclusive char_start/char_end convention). Read Task 1A's log (Paper
+entity has a flat `display_abstract: str` column, no separate structured-
+section storage) and Task 1B's log (PubMed client, `EFetchArticle`
+dataclass exposes `language: str | None` directly, exactly matching the
+`language: str | None` parameter this task's brief asked for — confirms
+no adapter needed between 1B and 1D). Running as one of 3 parallel Wave 2
+tasks in the same working tree (no git worktree isolation in this repo;
+1B/1C's files already present and untouched by me). Scope: exclusively
+`backend/app/text/normalize.py` and `backend/app/text/tokenize.py`
+(both new), plus their test files `backend/tests/test_normalize.py` and
+`backend/tests/test_tokenize.py` (both new). Not touching
+`app/models/`, `app/integrations/`, `app/routes/`, or `app/config.py`.
+
+[2026-07-04T13:05:00] TASK 1D — PIVOT
+Two architectural calls made explicit rather than silently decided:
+1. `Paper.display_abstract` (Task 1A schema) is a flat string with no
+   room to store PubMed's per-section `Label` metadata (§7.5's structured
+   abstracts). Since this task is the single source of truth for section-
+   header vs. sentence segmentation, `tokenize.py`'s public
+   `build_segmented_abstract()` takes structured input directly — a
+   `list[AbstractSection(label: str | None, text: str)]`, one entry per
+   EFetch `<AbstractText>` element (or a single `label=None` entry for an
+   unstructured abstract) — and *also* returns the flattened
+   `display_abstract` string for whichever task persists `Paper` rows
+   (Task 3A, per 1B's own log) to store. Flagging this so 3A/1B know the
+   flattening decision (how headers and section breaks are joined into
+   one string) lives here, not reimplemented at the persistence call site.
+2. Real MEDLINE `Language` field values are 3-letter codes (e.g. "eng",
+   "fre"), not BCP-47 — SPEC.md §13.3 doesn't spell this out, but this is
+   the actual PubMed/MEDLINE record format. `is_narration_unavailable()`
+   maps the common MEDLINE 3-letter codes to a 2-letter subtag before
+   comparing against the active narration locale's base language (e.g.
+   "en-US" -> "en"), and treats a missing/unrecognized `language` value
+   permissively (`narration_unavailable=False`) rather than blocking
+   narration on absent data, since §13.3 says the check only applies
+   "when present."
+3. Used a small self-written `_spell_cardinal()` (0 to 999,999) in
+   `normalize.py` instead of adding a `num2words` dependency — avoids
+   touching the shared `pyproject.toml` (a file this task doesn't own)
+   for a narrow amount of integer-spelling this abstract-narration use
+   case actually needs.
+
+[2026-07-04T13:45:00] TASK 1D — COMPLETE
+Did: `normalize_for_speech()` (§6.3) — Latin/citation abbreviation
+expansion (et al./e.g./i.e./vs./cf./approx./etc./Fig./Figs.), statistical/
+math notation (<, >, =, ±, %, ², CI) matching SPEC's own worked examples
+verbatim (numerals stay digits in stats context, e.g. "p < 0.05" ->
+"p less than 0.05"), Greek letters & symbols (α/β/γ/Δ/δ/μ/σ/λ/π/θ/ω, °C/°F),
+unit expansion (mg/mL/kg/Hz/kHz/nm/cm/mm, matched only when adjacent to a
+digit), reference-bracket stripping ([1], [1,2]), stray-whitespace/smart-
+quote cleanup, and small-integer number-reading for plain counts/figure
+references (e.g. "Fig. 2" -> "figure two", "40 participants" -> "forty
+participants") while leaving decimals/stats-context numerals as digits.
+`tokenize_sentences()` (§6.5) — abbreviation-aware sentence splitter with
+per-class handling (title abbreviations Dr./Mr./Prof./etc. never split
+regardless of capitalization of what follows; generic abbreviations
+e.g./i.e./vs./cf./approx./etc./Fig./Figs. never split; single-capital-
+letter genus initials like "E." in "E. coli" never split; the "et al."
+citation class is the one abbreviation whose next-token capitalization
+*is* checked, splitting only at genuine new sentences) — resolves the
+task's flagged hard case (`abbreviation_at_true_sentence_end` splits,
+`titles_and_approx`'s "Dr." never does) correctly. `build_segmented_
+abstract()` assembles the full CONTRACTS.md §1 pinned shape: section-
+header segments get `pause_class="structural"`, all sentence segments get
+`"sentence"` except the very first segment overall (always
+`"structural"`, per §6.4/CONTRACTS's explicit note) — verified against
+CONTRACTS' own worked example byte-for-byte (same spoken_text output for
+the "Fig. 2, e.g. ... vs." sentence). `is_narration_unavailable()` (§13.3)
+implements the language-mismatch flag as its own testable function.
+Worked: `pytest -q` on the full backend suite => 118 passed (57
+pre-existing + 61 new: 11 parametrized golden-corpus cases from
+`fixtures/tokenizer/abbreviation_corpus.json` (exact expected-sentence
+match) x2 (once for text equality, once for exact char-offset-slice
+correctness against the source string) + dedicated tests for the et-al/
+Dr. disambiguation and the baseline no-under-split case + segmented-
+abstract assembly tests (pause-class assignment, char_start/char_end
+invariant checked per-segment against the flattened `display_abstract`,
+index ordering) + 7 parametrized language-mismatch cases (§13.3) + ~30
+per-construct normalization unit tests covering every §6.3 bullet). Found
+and fixed one real bug during testing: the "et al." bigram lookback
+(`_is_sentence_boundary`) wasn't skipping the whitespace between "et" and
+"al" before searching for the second preceding token, so it never
+actually detected "et al." as a citation-class bigram — corpus tests
+caught this immediately (`abbreviation_at_true_sentence_end` failed with
+"1 == 2"), fixed in `_is_sentence_boundary`. `ruff check .` => all checks
+passed. `mypy app/` => success, no issues found in 21 source files.
+Changed: backend/app/text/normalize.py, tokenize.py (both new);
+backend/tests/test_normalize.py, test_tokenize.py (both new).
+Open: `build_segmented_abstract()`'s structured-section input contract
+(`AbstractSection(label, text)`) needs to be wired up by whichever task
+parses EFetch XML into that shape and persists the returned flattened
+`display_abstract` onto `Paper` rows — per 1B's log this is left to Task
+3A's core-loop endpoints, same as 1B's own `language`/`retracted`
+extraction. The actual `/api/v1/papers/{pmid}/abstract` route (owned by
+3A per BuildPlan.md) should call `build_segmented_abstract()` directly
+rather than reimplementing any segmentation/pause logic — nothing else in
+this codebase should ever recompute it, per BuildPlan's explicit
+single-source-of-truth note under Task 2D.
+
+[2026-07-04T09:45:00] TASK 1B — PIVOT (post-review fix)
+Adversarial review (logs/adversarial-generalist.build.log, "TASK 1B
+REVIEW") found a real credential-leak bug in `pubmed.py`'s `_get`:
+`response.raise_for_status()` sat outside the `try/except httpx.HTTPError`
+block, so any non-429/non-5xx 4xx response (400 malformed query, 403 bad
+API key, etc.) raised an uncaught `httpx.HTTPStatusError` whose `str()`
+embeds the full request URL — and `_common_params()` puts `email`/
+`api_key` directly in the query string on every call, so that URL
+contains NCBI_EMAIL/NCBI_API_KEY in plaintext. Since CONTRACTS.md
+documents an eventual catch-all handler (Task 3D) that will very likely
+log unhandled exceptions verbatim, this was a real path for credentials
+to land in shared logs — confirmed correct, no test previously covered
+any 4xx other than 429.
+Fix: removed the `raise_for_status()` call entirely; any response with
+`status_code >= 400` (after the existing 429/5xx branches, which already
+had their own handling) now raises `PubMedUnavailableError` with a
+sanitized, status-code-only message — never the request URL, params, or
+an httpx exception whose `__str__` could embed them. Added
+`test_403_response_does_not_leak_api_key_or_email_in_exception` (sets
+real-looking secret values via monkeypatch, asserts neither the raised
+exception's message nor its `__cause__` contains them) and
+`test_400_response_raises_pubmed_unavailable` (confirms a non-429/5xx 4xx
+still surfaces as a clean `PubMedUnavailableError`, not an uncaught
+`HTTPStatusError`).
+Declined the review's optional/minor suggestion (swapping stdlib
+`xml.etree.ElementTree` for `defusedxml` as XXE/entity-expansion
+defense-in-depth) for this pass — reviewer itself assessed it as low
+real exploitability (fixed HTTPS host, not user-supplied XML) and it
+would add a new third-party dependency to the shared `pyproject.toml`
+for a hardening measure rather than a confirmed bug; flagging it here as
+a deliberate "not now" rather than an oversight, in case a later security
+pass wants to revisit.
+
+[2026-07-04T09:48:00] TASK 1B — COMPLETE (re-verified after fix)
+Did: fixed the credential-leak bug above in
+`backend/app/integrations/pubmed.py`'s `_get` method.
+Worked: `pytest -q` on the full backend suite => 120 passed (includes the
+2 new regression tests plus all previously-passing tests across every
+agent's concurrent Wave 2 work — no regressions). `ruff check
+app/integrations/pubmed.py tests/test_pubmed_client.py` => all checks
+passed. `mypy app/integrations/pubmed.py app/integrations/icite.py
+app/config.py` => success, no issues.
+Changed: backend/app/integrations/pubmed.py (the `_get` fix + inline
+comment explaining why `raise_for_status()` is deliberately not used);
+backend/tests/test_pubmed_client.py (2 new tests:
+test_403_response_does_not_leak_api_key_or_email_in_exception,
+test_400_response_raises_pubmed_unavailable).
+Open: none for this fix. Ready for tester re-verification/re-dispatch.
+
+[2026-07-04T03:10:00] TASK 1C — PIVOT (post-review fix)
+Adversarial review (logs/adversarial-generalist.build.log, "TASK 1C
+REVIEW") found a credential-leak bug at backend/app/auth/oauth.py:166
+(same class as a bug just fixed in Task 1B's PubMed client):
+`logger.exception("...missing userID: %r", tokens)` logged the raw
+access-token response dict on the missing-`userID` error path. Per
+requests-oauthlib's actual token-parsing behavior, `tokens` normally
+contains the live, unencrypted `oauth_token`/`oauth_token_secret` bearer
+credentials that §9.6 requires be Fernet-encrypted via
+`app.models.crypto` before ever reaching storage — this log line wrote
+usable plaintext credentials to server logs on a malformed response,
+bypassing the encryption story entirely since this error path never
+reaches the encryption call site. Fixed: now logs only
+`sorted(tokens.keys())` (redacted metadata, no values) instead of the raw
+dict via `%r`. Added
+`test_complete_handshake_missing_userid_never_logs_raw_credentials` in
+tests/test_oauth.py — feeds a response with realistic-looking
+`oauth_token`/`oauth_token_secret` values and a missing `userID`, and
+asserts via `caplog` that neither value appears anywhere in the captured
+log text.
+Worked: `pytest -q tests/test_oauth.py tests/test_zotero.py` => 17
+passed (16 prior + 1 new). Full suite `pytest -q` => 119 passed, 2 failed
+— both failures are in tests/test_pubmed_client.py (Task 1B's file, not
+touched by this fix; appears to be a concurrent in-flight change on
+1B's own credential-leak fix, outside this task's scope). `ruff check .`
+=> all checks passed. `mypy app/` => success, no issues (21 source
+files).
+Changed: backend/app/auth/oauth.py (redacted the log line),
+backend/tests/test_oauth.py (new regression test).
+Open: same as prior COMPLETE entry (Task 3B route wiring; live Zotero
+credentials still pending). Notifying the coordinator this fix is done
+and ready for re-verification.
+
+[2026-07-04T14:15:00] TASK 1D — PIVOT (post-adversarial-review fixes)
+Coordinator relayed 3 findings from logs/adversarial-generalist.build.log
+("TASK 1D REVIEW") — all addressed before calling the task done:
+1. SIGNIFICANT, fixed: `normalize_for_speech()` handled ASCII `<`/`>`/`=`
+   but not Unicode `≤`/`≥` — confirmed the reviewer's repro
+   (`normalize_for_speech("p ≤ 0.05 was considered significant.")` was
+   returning the string unchanged, the same "unknown character -> silence"
+   TTS failure mode §6.3 calls out for Greek letters, but here silently
+   dropping a comparison direction on a clinically meaningful threshold).
+   Added `≤`->"less than or equal to" / `≥`->"greater than or equal to"
+   handling in `_expand_math_operators` (refactored the four operator
+   cases through one shared `_op()` helper rather than four near-
+   duplicate `re.sub` calls) plus two new test cases in
+   test_normalize.py.
+2. Lower-priority fluency fix, done since cheap: the operator regexes
+   didn't match a leading minus sign, so "r = -0.34" dropped "equals"
+   while "p < 0.001" in the same sentence correctly got "less than".
+   Widened the shared number pattern to `-?[0-9]+(?:\.[0-9]+)?` and added
+   a regression test.
+3a. Unified the two structurally-identical-but-nominally-distinct
+   `AbstractSection` dataclasses: removed pubmed.py's own definition and
+   had it import `AbstractSection` from `app/text/tokenize.py` instead
+   (the single-source-of-truth module per BuildPlan's note under Task
+   2D) — a small, additive one-line-import + one-dataclass-removal diff
+   to pubmed.py, no behavior change (same two fields, same call sites at
+   lines ~454/471 already construct it identically). Flagging explicitly
+   per the coordinator's note since Task 1B's owner already merged and
+   moved on: `backend/app/integrations/pubmed.py` now has a new import
+   from `app.text.tokenize` and no longer defines its own
+   `AbstractSection` — everything else in that file is untouched.
+3b. `build_segmented_abstract()` now also returns a flattened
+   `spoken_abstract` string (parallel to the existing `display_abstract`
+   accumulator, same section/sentence-join convention, headers included
+   in their spoken form e.g. "Background." rather than "Background") —
+   its return type changed from `tuple[str, SegmentedAbstractResponse]`
+   to `tuple[str, str, SegmentedAbstractResponse]`
+   (`display_abstract, spoken_abstract, response`). This satisfies
+   CONTRACTS.md §1's note that segments' `spoken_text` is "sourced from
+   `Paper.spoken_abstract`" — Task 3A can now persist both flattened
+   strings onto a `Paper` row directly instead of re-deriving the same
+   join logic. All existing call sites (this task's own tests) updated
+   to unpack the 3-tuple.
+Worked: `pytest -q` => 123 passed (118 previous + 5 new: 2 for `≤`/`≥`
+handling, 1 for the negative-number-after-equals fix, plus the existing
+segmented-abstract tests extended to assert on the new `spoken_abstract`
+return value). `ruff check .` => all checks passed. `mypy app/` =>
+success, no issues found in 21 source files (includes pubmed.py's
+updated import).
+Changed: backend/app/text/normalize.py (`_expand_math_operators`
+refactor + `≤`/`≥` + negative-number handling), backend/app/text/
+tokenize.py (`build_segmented_abstract` now also returns
+`spoken_abstract`), backend/app/integrations/pubmed.py (imports
+`AbstractSection` from `app.text.tokenize` instead of redefining it —
+Task 1B's file, touched here per the coordinator's explicit instruction),
+backend/tests/test_normalize.py (+3 tests), backend/tests/test_tokenize.py
+(updated 3-tuple unpacking + 1 new assertion block).
+Open: none. Ready for re-verification.

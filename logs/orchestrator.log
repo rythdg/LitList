@@ -26,3 +26,90 @@ BuildPlan's explicit note that 1A must merge before 1C can truly claim
 independence) run concurrently with Tier 2 (Tasks 2A-2D, 4 parallel
 frontend subagents), since Tier 2 depends only on Tier 0's contracts,
 not Tier 1's implementation, per BuildPlan.md line 452-457.
+
+[2026-07-04] Task 2C — MERGE CONFIRMED
+tester's TASK 2C VERIFY entry confirms the checkpoint: 34/34 tests,
+store-transitions genuinely isolated from React, CONTRACTS.md shapes
+match verbatim, MSW mocks reuse Task 0.3 fixtures exactly. Per the
+checkpoint table, 2C requires only `tester`, no `adversarial-generalist`
+review — merging.
+OPEN ITEM (not a 2C defect, tracked forward): both 2C's own build log
+and tester's verify independently flagged that SPEC.md §10.4 has no
+Zotero-disconnect endpoint, so `useDisconnectZotero` targets a
+placeholder `DELETE /zotero/connection` the backend hasn't agreed to
+yet. Recommend a one-line SPEC.md §10.4 / CONTRACTS.md addition before
+Task 3B (Zotero backend endpoints) starts, to fix this shape once
+rather than let 3B guess independently. Flagging to the human now
+rather than unilaterally editing SPEC.md.
+
+[2026-07-04] Task 1A — MERGE CONFIRMED, Wave 1 closed
+tester's TASK 1A VERIFY (gate MET, zero findings on the checkpoint's
+actual cited scope) and adversarial-generalist's TASK 1A REVIEW (no
+BLOCKING findings; explicitly states "Tier 1 Wave 2 is safe to start")
+both on file. Adversarial found 4 real non-blocking gaps tester's pass
+missed — tracked as backlog, not merge blockers per BuildPlan's
+asymmetric precedence rule (only BLOCKING overrides a met gate):
+  1. SIGNIFICANT — OAuthSessionBinding has no proactive expiry sweep,
+     only lazy expiry-on-resolve; abandoned handshakes accumulate
+     unboundedly in the always-on process. Revisit at Task 3D
+     (cross-cutting middleware) or 5A (infra) — whichever adds a
+     natural periodic-task hook first.
+  2. SIGNIFICANT — ephemeral Fernet/cookie-secret fallback only logs a
+     warning, no environment-aware fail-fast; a real deployment booted
+     without TOKEN_ENCRYPTION_KEY set silently loses all encrypted
+     Zotero tokens on next restart. Revisit at Task 5A (infra
+     provisioning) when a real deployment environment exists to
+     fail-fast against.
+  3. MINOR — no unique constraint on (session_id, pmid) for
+     QueueDecision despite §9.2 describing one row per pair.
+  4. MINOR — oauth_token/oauth_token_secret encryption is call-site
+     convention only, no structural guardrail. Re-check when Task 1C's
+     OAuth callback is reviewed.
+Wave 1 (Task 1A) MERGED. Tier 1 Wave 2 (Tasks 1B, 1C, 1D) dispatched in
+parallel per BuildPlan.md lines 397-448.
+
+[2026-07-04] Task 2A — MERGE CONFIRMED
+tester's TASK 2A VERIFY confirms the checkpoint: 21 files/81 tests
+stable across 3 runs, package.json/lockfile genuinely reproducible
+after the concurrent-install incident (clean `npm ci`, deduped tree,
+no ERESOLVE), Lighthouse installability audits empirically verified
+via the actual LHR JSON (not just exit code). Per the checkpoint table,
+2A requires only `tester`, no `adversarial-generalist` — merging.
+tester also independently corroborated a real re-entrancy bug in Task
+2D's usePlaybackEngine (double play() call in one tick fires two
+speak() calls) surfaced by adversarial-generalist's in-flight repro
+work on 2D — not a 2A defect, tracked under Task 2D's review instead.
+
+[2026-07-04] PATTERN NOTE — credentials leaking via raw log calls
+Second occurrence in Wave 2: 1B's PubMed client leaked NCBI_API_KEY/
+NCBI_EMAIL via an uncaught httpx exception's URL-embedded message on
+4xx responses; 1C's OAuth handshake leaked raw Zotero oauth_token/
+oauth_token_secret via `logger.exception("...: %r", tokens)` on a
+malformed access-token response. Both are the same underlying failure
+mode — an error/exception path that logs a raw object/exception
+containing live secrets instead of a sanitized summary — independently
+introduced by the same specialist in two different files, each caught
+only by adversarial-generalist's review, not by the specialist's own
+tests or tester's checkpoint. Recommend Task 3D (cross-cutting
+middleware, §10.3/§10.5/§10.7 — the catch-all exception handler) adopt
+a project-wide rule/lint check against logging raw request/response
+objects, request URLs with query params, or `%r`-formatted external
+API payloads, rather than relying on adversarial review to catch each
+instance ad hoc. Flagging forward to Task 3D's brief.
+
+[2026-07-04] Task 1B — MERGE CONFIRMED (post-fix)
+Credential-leak fix independently re-verified: tester read the fixed
+code, confirmed the new tests are non-vacuous by reverting the fix and
+reproducing the exact original leak in the failure output, then
+restored it byte-identical. Full suite 121/121 green, ruff/mypy clean.
+Ready to merge once committed alongside 1C/1D (same Wave 2 commit,
+since config.py/.env.example/pyproject.toml accumulate settings across
+all three concurrently).
+
+[2026-07-04] Task 1C — MERGE CONFIRMED (post-fix)
+Credential-leak fix independently re-verified with the same
+revert-reproduce-restore rigor as 1B: tester reverted the fix, got the
+exact original raw-token-dict leak in the log output, restored
+byte-identical. Full suite 121/121 green, ruff/mypy clean. Ready to
+merge pending Task 1D's in-flight fix (≤/≥ narration gap, duplicate
+AbstractSection type, missing flattened spoken_abstract).

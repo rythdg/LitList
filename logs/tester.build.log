@@ -108,3 +108,1371 @@ blocker): confirm at Task 1D's verification that the tokenizer's real
 pytest suite consumes fixtures/tokenizer/abbreviation_corpus.json
 directly rather than duplicating it, per BuildPlan's explicit reason
 for building this fixture once.
+
+[2026-07-04T15:00:00] TASK 1A VERIFY — START
+Verifying BuildPlan.md Task 1A (Data model & session identity), SPEC.md
+§9 all, §10.2 — Tier 1 Wave 1 solo hard-dependency gate; Wave 2 (1B/1C/1D)
+cannot start until this is confirmed merged. Read senior-backend-
+developer.build.log's Task 1A START/PIVOT/COMPLETE entries first. Checking
+backend/app/models/{entities,ids,identity,crypto}.py,
+backend/app/middleware/session.py, and all four new test files
+(test_crypto.py, test_oauth_session_binding.py, test_session_identity.py,
+test_session_middleware.py) plus conftest.py against SPEC.md §9.2, §9.6,
+§10.2, §10.6, §12.2, §15.1.
+
+[2026-07-04T15:35:00] TASK 1A VERIFY — COMPLETE
+Point-by-point:
+
+1. Ran `pytest -v` from backend/: 21 passed (4 pre-existing test_db.py/
+   test_health.py + 17 new — 5 test_crypto.py, 6 test_oauth_session_
+   binding.py, 3 test_session_identity.py, 3 test_session_middleware.py),
+   matching the self-report exactly. `ruff check .` => "All checks
+   passed!". `mypy app/` => "Success: no issues found in 15 source files".
+   All three claims independently confirmed, not taken on faith.
+
+2. `app/models/ids.py::generate_session_id` calls `secrets.token_urlsafe(32)`
+   — genuine CSPRNG source (stdlib `secrets`, not `random`). Confirmed via
+   direct read, not just grep: no other random source anywhere in ids.py.
+   `test_generate_session_id_uses_csprng` patches `secrets.token_urlsafe`
+   itself and asserts the call happened with nbytes=32, so this actually
+   verifies the *source*, not just "looks random" — good test design.
+   Rotation-on-Zotero-connect is genuinely tested, not just present in
+   code: `test_rotate_session_issues_new_id_and_migrates_linked_rows`
+   creates a real ZoteroConnection + SearchSession + QueueDecision under
+   an old session_id, calls `rotate_session`, and asserts (a) a new id is
+   issued, (b) the old Session row is gone, (c) all three FK-linked rows
+   were repointed to the new id and their data survived. This is a real
+   exercise of the migration, not a mock.
+
+3. Fernet round-trip in test_crypto.py genuinely does an independent-secret
+   assertion, not just "same key encrypt/decrypt works":
+   test_independent_keys_yield_independent_ciphertext_and_cross_decryption_fails
+   generates two distinct Fernet keys, encrypts the same plaintext under
+   each, asserts the ciphertexts differ, and explicitly asserts
+   `cryptography.fernet.InvalidToken` is raised when ciphertext_a is
+   decrypted under key_b and vice versa. test_decrypt_with_wrong_key_
+   raises_safe_value_error additionally confirms the app-level wrapper
+   (`crypto.decrypt_token`) converts that into a safe ValueError rather
+   than leaking the raw exception, consistent with §10.3's "never return
+   raw exception text" rule. Both cases genuinely exercised.
+
+4. OAuthSessionBinding (middleware/session.py) rejects both a mismatched
+   AND an expired token, each with its own dedicated test, not just one
+   case dressed up two ways:
+   - test_resolve_rejects_mismatched_session: stores under
+     "session-victim", resolves with "session-attacker" — asserts None.
+   - test_resolve_rejects_expired_token: monkeypatches
+     `app.middleware.session.time.monotonic` directly (not just sleeping),
+     advances fake time past the 60s TTL, asserts None.
+   Bonus coverage beyond what was asked: single-use-on-correct-match and
+   single-use-even-after-a-mismatched-attempt (prevents an attacker
+   probing the same pending token repeatedly) — this is solid, not
+   superficial coverage of the binding primitive.
+
+5. SQLModel entities in backend/app/models/entities.py checked field-by-
+   field against SPEC.md §9.2: Session (session_id PK, created_at,
+   last_seen_at), ZoteroConnection (session_id FK unique, zotero_user_id,
+   oauth_token, oauth_token_secret, connected_at), SearchSession
+   (session_id FK unique, query, sort enum, read_aloud_fields JSON list,
+   default_swipe_behavior enum, speed, updated_at), Paper (pmid PK, title,
+   authors JSON, last_author, journal, pub_date, doi, display_abstract,
+   spoken_abstract, citation_count, citation_fetched_at,
+   esummary_fetched_at, efetch_fetched_at), QueueDecision (session_id FK,
+   pmid FK, position, decision enum, decided_via enum, decided_at),
+   ZoteroExport (session_id FK, pmid FK, zotero_item_key,
+   zotero_collection_key, pushed_at). No field-name or type mismatches
+   found against §9.2's tables — this is a clean, faithful implementation.
+
+6. Both logged pivots checked against the actual SPEC.md text they cite,
+   not just the specialist's paraphrase:
+   - Plain ASGI middleware vs BaseHTTPMiddleware: SPEC.md doesn't mandate
+     either implementation detail (§10.2 only describes behavior), so this
+     is a legitimate engineering judgment call within spec, correctly
+     scoped to future CSV streaming (§8.8/§10.4) which is real and cited
+     accurately.
+   - In-process TTL dict for OAuthSessionBinding: §10.2 literally says "a
+     short-lived row/cache entry, not a permanent one" (line 1793 of
+     SPEC.md) — this genuinely permits either a DB row or an in-process
+     cache, so the claim is accurate, not a stretch. §10.6 does say "no
+     background task queue... needed for v1" and describes a single
+     always-on process model, and §12.2 confirms "Backend compute: Render
+     (free web service)" as a single small always-on process — both
+     citations check out against the actual text, and the docstring's own
+     caveat ("if this backend ever runs as multiple worker processes...")
+     shows the specialist understood the limitation rather than hiding it.
+     Both pivots are legitimate and accurately justified.
+
+7. No real key material committed: `backend/.env.example` has all secret
+   fields (SESSION_COOKIE_SECRET, TOKEN_ENCRYPTION_KEY, TURSO_*, ZOTERO_*,
+   NCBI_*) left blank with generation instructions only. `git status`
+   confirms `.env`/`backend/.env` are gitignored (lines 17-18 of
+   .gitignore) and no `.env` file appears in git history for this path.
+   grep across the repo (excluding .venv) found no hardcoded
+   TOKEN_ENCRYPTION_KEY/SESSION_COOKIE_SECRET value, only the blank
+   `.env.example` line. `app/config.py`'s new settings fields default to
+   `None`, not a hardcoded dev key. The ephemeral-key fallback in both
+   `crypto.py::_get_key` and `middleware/session.py::_get_cookie_secret`
+   does call `logger.warning(...)` with an explicit, detailed message
+   before generating the fallback key — confirmed by reading the code,
+   not just trusting the docstring's claim.
+
+No findings to flag, even minor ones, on this task's scope. Coverage is
+genuinely sufficient for §15.1's Task 1A bullet points (CSPRNG + rotation,
+Fernet round-trip + independent-secret assertion, binding-primitive
+mismatch/expiry rejection) — not thin, not over-mocked.
+
+Verdict: Tier 1 Wave 1 exit gate for Task 1A is MET. Safe for Wave 2
+(Tasks 1B/1C/1D) to start against this as a merged dependency.
+
+[2026-07-04T09:00:00] TASK 2C VERIFY — START
+Verifying BuildPlan.md Task 2C (state architecture scaffolding), §11.2,
+against senior-frontend-developer.build.log's TASK 2C COMPLETE entry.
+Checking: (1) src/state and src/api test suite pass count + lint/
+typecheck/build; (2) store tests are genuinely getState()/setState()-only,
+no React rendering; (3) api/types.ts's three pinned shapes match
+CONTRACTS.md verbatim; (4) MSW fixtures reuse Task 0.3's fixture data
+rather than inventing new values; (5) the unlisted DELETE /zotero/
+connection endpoint gap is real; (6) the 2 pre-existing
+usePlaybackEngine.test.ts failures 2C flagged are isolated to 2D's file.
+
+[2026-07-04T09:20:00] TASK 2C VERIFY — COMPLETE
+
+1. `npx vitest run src/state src/api --reporter=verbose`: 11 test files,
+   34/34 passed, exactly matching the self-report (client.test.ts x4,
+   queue/abstract/search/zotero/saved/decisions.test.tsx x14, four
+   store test files x10 + uiStore x2). `npx eslint src/state src/api
+   --max-warnings 0` -> exit 0, clean. `npm run typecheck` (tsc -b
+   --noEmit) -> exit 0, clean. `npm run build` -> succeeded end-to-end
+   (tsc -b && vite build + vite-plugin-pwa precache, 14 entries).
+   All four claims independently reproduced, not taken on faith.
+
+2. Spot-checked src/state/playbackStore.test.ts and
+   src/state/panelStore.test.ts directly: every test calls
+   `usePlaybackStore.getState()`/`.setState()`/`.getInitialState()`
+   exclusively — no `render()`, no `renderHook()`, no React import
+   anywhere in either file. This genuinely satisfies §15.2's "store
+   transitions in isolation" claim, not just superficially.
+
+3. Read CONTRACTS.md's three pinned shapes (segmented-abstract §1, API
+   error §2, Zotero push per-item §3) and frontend/src/api/types.ts side
+   by side, field-by-field: PauseClass, SegmentKind, AbstractSegment
+   (index/kind/section_label/display_text/spoken_text/char_start/
+   char_end/pause_class), SegmentedAbstractResponse (pmid/
+   narration_unavailable/segments), ApiError's {error:{code,message}}
+   envelope (ApiErrorCode union matches CONTRACTS.md's pinned table
+   exactly: service_unavailable/rate_limited/not_found/
+   validation_error/zotero_not_connected/zotero_session_mismatch/
+   internal_error), and ZoteroPushResult/ZoteroPushResponse (pmid/
+   status/zotero_item_key?/error?, collection_key/results). No field-
+   name or type drift found — this is a verbatim transcription, not an
+   approximation, as required given 1B/1C/1D will independently
+   implement the backend side of the same contract.
+
+4. Read fixtures/pubmed/esummary_response.json and fixtures/zotero/
+   {collections,item_creation}_response.json directly, then
+   frontend/src/api/mocks/fixtures.ts: PMIDs 38279812 (normal, DOI
+   10.1234/jacr.2024.001812, lastauthor Alvarez S), 38279813 (no DOI,
+   retracted), 37000001 (sparse/null citation count) all reused
+   verbatim; Zotero collection keys ABCD1234/WXYZ5678 with names
+   "Journal Club"/"To Read" reused verbatim; item-creation success
+   (index 0, key XJ2K9F3P) / failure (index 1, 503) partial-batch
+   pattern reused verbatim as the ZoteroPushResponse fixture. Confirmed
+   genuinely sourced from Task 0.3's corpus, not invented ad hoc — the
+   underlying fixture files themselves even say "Used by ... Task 2C's
+   MSW handlers" in their own _fixture_note fields, corroborating this
+   was the intended consumption path from Task 0.3's side too.
+
+5. Grepped SPEC.md for "disconnect": only prose references (§5.4's
+   wireframe showing a "[ Disconnect Zotero ]" button, §9.6 area
+   discussing the risk motivating it) — no endpoint is listed in
+   §10.4's endpoint table, and CONTRACTS.md has no fourth pinned shape
+   for it either. The gap is real, not a misreading on the specialist's
+   part. Assessment: this is a reasonable placeholder for now — 2C's
+   own log and a code comment in zotero.ts both flag it explicitly
+   (DELETE /zotero/connection as "the natural REST-ful counterpart...
+   pending that being added to §10.4"), it doesn't block any other
+   Tier 2 module, and it's cheap to formalize. However, I'd recommend
+   escalating this to be added to SPEC.md §10.4 (and possibly
+   CONTRACTS.md if a response shape is needed) *before* Tier 3's
+   Zotero backend task (3B) starts, rather than deferring silently to
+   whenever 3B happens to notice — otherwise 3B has no reason to know
+   the frontend already assumed a specific verb+path, and could
+   independently pick a different one (e.g. POST /zotero/disconnect),
+   recreating exactly the class of drift Task 0.2/CONTRACTS.md exists
+   to prevent. This is a paper-cut, not a blocker: one line added to
+   the §10.4 table closes it.
+
+6. Ran the full frontend suite (`npx vitest run`, no filter): 21 test
+   files, 81/81 passed, including src/playback/usePlaybackEngine.test.ts
+   (8/8 passed on its own when run in isolation too). No failures
+   anywhere. This does NOT match 2C's (and 2B's) self-report of "2-3
+   pre-existing failures in usePlaybackEngine.test.ts, outside my
+   scope" — but checking senior-frontend-developer.build.log's TASK 2D
+   COMPLETE entry (timestamped after 2C's own COMPLETE entry) shows 2D
+   fixed those failures as part of finishing its own task and re-ran
+   the full suite to 81/81 green before logging completion. So: 2C's
+   claim was accurate *at the time 2C wrote it* (2D's file was
+   genuinely still broken mid-flight when 2C looked), and 2C correctly
+   attributed the failures to 2D's file rather than owning them or
+   silently working around them. This is not a discrepancy in 2C's own
+   work, just a snapshot that's since been superseded — confirmed
+   currently green, confirmed not caused by or masked by anything in
+   src/state or src/api.
+
+VERDICT: Task 2C checkpoint MET. All four claimed test/lint/typecheck/
+build results independently reproduced exactly; store tests genuinely
+avoid React rendering per §15.2; api/types.ts's three CONTRACTS.md-
+pinned shapes are verbatim matches, no drift; MSW fixtures are
+genuinely Task 0.3-derived, not invented. One real, correctly-flagged
+gap remains open — SPEC.md §10.4 has no Zotero-disconnect endpoint —
+which I assess as a reasonable stopgap for now but recommend the
+orchestrator escalate to formalize (a one-line SPEC.md/CONTRACTS.md
+addition) before Task 3B starts building the real Zotero backend
+routes, to prevent a foreseeable contract-drift bug rather than
+discovering it during Tier 4 integration.
+
+[2026-07-04T15:00:00] TASK 2D VERIFY — START
+Verifying BuildPlan Task 2D (usePlaybackEngine, §6 all except tokenizer,
+§11.3, §13.2, §13.7) against BuildPlan.md lines 487-506 and §15.9. Read
+senior-frontend-developer.build.log's TASK 2D START/PIVOT/COMPLETE
+entries first. Checking: (1) full frontend suite + module test count +
+lint/tsc/build, (2) genuineness of each §15.9 case, (3) duplicated-logic
+risk vs. unbuilt Task 1D, (4) the two flagged interpretation calls
+(mute/speed as props; generic PlaybackItem).
+
+[2026-07-04T15:20:00] TASK 2D VERIFY — COMPLETE
+1. Ran `npx vitest run` in frontend/: 21 files / 81 tests passing,
+   matching the self-report exactly. Ran
+   `npx vitest run src/playback/usePlaybackEngine.test.ts` in isolation:
+   1 file / 8 tests passing, matching the claimed 8/8. Ran
+   `npx eslint . --max-warnings 0`: clean, no output. Ran
+   `npx tsc -b --noEmit`: clean, no output. Ran `npm run build`: succeeded
+   end-to-end (tsc -b && vite build, vite-plugin-pwa precache 14 entries).
+   All build/lint/test claims verified, not just trusted.
+
+2. §15.9 case-by-case, read test bodies directly (not just test names):
+   - Timer-fallback: `usePlaybackEngine.test.ts` lines 80-124 drives a
+     manual FIFO timer queue through all 3 fixture items to a real
+     `status === "finished"` end state via repeated `clock.fireNext()`
+     calls, asserting `currentKey` transitions title -> seg-0 -> seg-1 ->
+     null and `onFinished` called once. Genuinely exercised step-by-step,
+     not just "code path present."
+   - Mute-same-clock: lines 126-160 runs two independent hook instances
+     (muted vs unmuted) each through one gap and asserts
+     `mutedGapMs === unmutedGapMs` while only `volume` differs (0 vs 1).
+     A second test (162-179) verifies live mid-utterance mute toggling
+     changes `utterance.volume` without any clock interaction. Genuine.
+   - Speed scaling on BOTH clock and utterance: lines 182-206 asserts
+     BOTH `fastDuration ≈ slowDuration / 2` (2x speed halves the
+     fallback-timer duration) AND `utterance.rate === 1.5` on the
+     real-synth path in the same test — this is the one BuildPlan
+     explicitly wants checked ("scaled together, not independently") and
+     it is, in one test that checks both mechanisms.
+   - Mid-narration cancellation / no orphaned utterances: lines 209-236.
+     Confirmed a real generation-counter guard exists in the source
+     (`generationRef`, bumped in `play()`/`pause()`/`cancel()`/unmount,
+     checked in every timer/onend/onerror callback before it's allowed to
+     advance state) and that the test actually fires a stale `onend`
+     *after* `cancel()` and asserts zero further `onItemChange` calls,
+     `speak` still only called once, state still idle. This is exactly
+     the "cancel, then advance, assert nothing fires" pattern requested,
+     not merely asserting `cancel()` was called.
+   - Wake Lock: lines 238-267, `requestWakeLock` asserted called once on
+     `play()`, `release()` asserted called once on `cancel()`. Confirmed
+     in source `play()` calls `envRef.current.requestWakeLock()` and
+     `pause()`/`cancel()`/`finish()`/unmount all call `releaseWakeLock()`.
+   All 5 cited cases genuinely exercised, not just present.
+
+3. Duplicated-logic check (the checkpoint BuildPlan flags as most
+   important): read frontend/src/playback/usePlaybackEngine.ts in full.
+   It does NOT split text into sentences, does NOT do abbreviation-aware
+   tokenization, and does NOT decide whether a gap is "structural" vs
+   "sentence" — it only reads `item.pauseClass` (already assigned by the
+   caller, per CONTRACTS.md's pinned `AbstractSegment.pause_class`
+   category) and maps that category to a millisecond value
+   (`pauseDurationMs`), scaled by `speed`. The only place `.split()`
+   appears in the file is `estimateSpeechDurationMs`'s
+   `text.trim().split(/\s+/)` — a word-count heuristic used solely to
+   estimate a fallback-timer *duration* when there's no real
+   SpeechSynthesisUtterance to time against; this is not sentence
+   segmentation, abbreviation handling, or pause-class assignment, and it
+   never touches or reproduces 1D's Fig./vs./et al. tokenizer rules. No
+   duplicated-logic violation found. CONTRACTS.md §1 confirmed to pin
+   only the `pause_class` *category*, not an ms value, matching the
+   PIVOT's stated justification. Task 1D has not yet been built
+   (confirmed no backend/app/text/tokenize.py exists), so this check
+   matters — verdict: clean.
+
+4. Interpretation calls:
+   (a) Mute/speed as reactive props: SPEC.md §11.2 pins mute as
+   Zustand-owned local-only state with no backend counterpart; §11.3
+   describes the engine's action surface as including `toggleMute()`.
+   The implementation instead takes `muted`/`speed` as hook inputs and
+   applies them to `utterance.volume`/`rate` live, without exposing a
+   `toggleMute()` export. This does resolve the "one fact, one home"
+   principle in favor of Zustand as sole owner, and BuildPlan's own Task
+   2D bullet list (lines 487-506) never lists `toggleMute()` as a
+   required export — only "mute-via-volume=0" is cited, which is
+   satisfied. Reasonable reading; note as a genuine (not silent) SPEC
+   §11.3-vs-BuildPlan deviation from the literal API surface described in
+   §11.3, worth a one-line mention to whichever task wires this hook into
+   the Zustand store, so `toggleMute` (if the UI expects it as a named
+   function) is understood to live in the store, not the hook.
+   (b) PlaybackItem generic type: confirmed CONTRACTS.md pins only the
+   `AbstractSegment` shape (§1) and the API error shape (§2) as of this
+   point in the build; no title/metadata/queue-item shape is pinned
+   anywhere in CONTRACTS.md. Reasonable to keep `PlaybackItem` local and
+   generic pending Tier 3.
+
+Coverage note (not a blocker, but worth flagging): all 8 tests drive the
+hook through directly-constructed `PlaybackItem[]` fixtures matching
+CONTRACTS.md's `AbstractSegment` shape by hand, never against
+fixtures/pubmed/*.json or a shared fixture file — reasonable given 1D
+doesn't exist yet, but means there is currently zero test proving the
+hook behaves correctly against 1D's *actual* future output (e.g. a
+segmented abstract with a `section_header` kind mixed with `sentence`
+kind, or `narration_unavailable: true`). That integration proof is
+correctly deferred to a later Tier 4-ish wiring task per BuildPlan's own
+"Tier 2 exit gate ... not yet proof the real backend integrates
+cleanly" caveat — not a 2D gap, but flagging so whoever does that wiring
+knows it hasn't been tested yet anywhere.
+
+Verdict: Task 2D checkpoint MET. All cited §15.9 cases genuinely
+exercised (not merely present), no duplicated tokenizer/segmentation/
+pause-class logic found vs. the not-yet-built Task 1D, full frontend
+suite green (21/21 files, 81/81 tests) with usePlaybackEngine.test.ts's
+8/8 independently confirmed, eslint/tsc/build all clean as claimed.
+
+[2026-07-04T15:10:00] TASK 2B VERIFY — START
+Verifying senior-frontend-developer's Task 2B (presentational screens,
+SPEC.md §5 all + §13.4 retracted badge) against BuildPlan.md lines
+465-478 and §15.2. Read the 2B COMPLETE log entry, BuildPlan's task
+spec, SPEC.md §5.1-5.6 and §13.4 in full before running anything.
+
+[2026-07-04T15:45:00] TASK 2B VERIFY — COMPLETE
+
+1. Test run (§15.2):
+   `npx vitest run src/components/screens` → 6 files, 28/28 passing.
+   Matches the specialist's claim exactly.
+   `npx eslint src/components/screens` → clean, no output.
+   `npm run typecheck` (tsc -b --noEmit) → clean.
+   `npm run build` → succeeds, vite-plugin-pwa precache generated
+   (14 entries). All four claims independently verified true.
+
+2. Per-screen-state coverage (§15.2) — read every *.test.tsx file, not
+   just counted names:
+   - Idle (§5.1): IdleScreen.test.tsx — wordmark render, saved-list
+     affordance disabled/enabled by hasSavedItems, tap-equivalent calls
+     onOpenSearch. Genuine.
+   - Loading (§5.2): SearchSettingsPanel.test.tsx — asserts the inline
+     spinner test-id appears under isLoading and does NOT appear when
+     idle, and that fields stay enabled during loading (matches §5.2's
+     "never a full-screen blocker" requirement). Genuine, not a stub.
+   - Empty-result (§5.3a): EmptyQueueState.test.tsx — asserts the failed
+     query string is echoed in copy and the play button carries a
+     `disabled` attribute (not just visually greyed). Genuine.
+   - Error (§5.5 step 3b): ZoteroPushFlow.test.tsx — asserts step
+     "failure" renders and that failureReason "push" vs "connection"
+     produce genuinely different copy ("couldn't save to zotero" vs
+     "couldn't connect to zotero"), plus CSV fallback button always
+     present. Genuine — this is a real two-variant assertion, not one
+     generic error string.
+   All four states are actually exercised with distinct assertions, not
+   just rendered-without-crashing checks.
+
+3. XSS regression test (SegmentedAbstract / StackScreen.test.tsx):
+   Read SegmentedAbstract.tsx — renders `segment.display_text` as a
+   plain React child inside `<span>`, no `dangerouslySetInnerHTML`
+   anywhere in src/components/screens/ (grepped, zero hits outside a
+   comment). The test
+   "never renders title or abstract text as executable/raw HTML"
+   genuinely injects `<img src=x onerror="window.__xss = true">` into
+   the title fixture and `<script>window.__xss = true;</script>` into a
+   segment's display_text, then asserts: no `<script>`/`<img>` element
+   exists in the DOM, `window.__xss` is never set, and the literal
+   marked-up string is present as visible text via getByText/
+   getByTestId. This is a real proof of safe rendering, not merely an
+   assertion that normal text renders correctly. Confirmed genuine.
+
+4. usePlaybackEngine.test.ts (Task 2D's file) isolation check:
+   - Ran full suite (`npm run test`) 12 times total. Result was NOT a
+     stable "3 failing tests" as the 2B log states — 11/12 runs came
+     back 81/81 passing; exactly 1/12 runs showed a single failure (not
+     three):
+     `src/playback/usePlaybackEngine.test.ts > usePlaybackEngine — mute
+     (§6.5, §15.9) > advances the highlight on the exact same clock
+     whether muted or not`
+     `AssertionError: expected 'title' to be 'seg-0' // Object.is
+     equality  Expected: "seg-0"  Received: "title"` at
+     usePlaybackEngine.test.ts:138. Accompanied by a React
+     "not wrapped in act(...)" warning on the same test. Ran the same
+     file in isolation 3x back-to-back — passed 8/8 every time — so
+     this is a genuine intermittent race, not a deterministic failure,
+     and not something that reproduces predictably enough to hand back
+     as "3 failing tests." Traced the likely source: usePlaybackEngine.ts
+     calls `envRef.current.requestWakeLock().then(...)` inside `play()`
+     without the test awaiting/flushing that promise before the next
+     `act()` block, so an out-of-order microtask resolution can race the
+     manual-clock timer firing. This is inside 2D's own module
+     (usePlaybackEngine.ts / usePlaybackEngine.test.ts) — confirmed by
+     grep that neither file imports from or is imported by anything
+     under src/components/screens/, and the one file both tasks'
+     agents touch (src/test/setup.ts, the shared MSW setupFiles entry)
+     was authored by 2A/2C, not modified by 2B. So: yes, isolated to
+     2D's own file, not caused by anything 2B touched — but the
+     specialist's characterization ("3 failing tests," implying a
+     stable/reproducible count) does not match what I observed running
+     it myself; flagging as a flaky race condition for 2D to
+     investigate (real timing bug in play()'s unawaited wake-lock
+     promise), not a count discrepancy to wave off.
+
+5. §5/§13.4 scope gaps found while reading StackScreen.tsx against
+   §5.3/§13.1:
+   - §5.3's prose explicitly requires a keyboard equivalent for the mute
+     toggle ("tap/click the mute icon or its keyboard equivalent →
+     toggle mute (13.1)"). StackScreen.tsx's keydown switch handles
+     ArrowRight/ArrowLeft/Space/ArrowDown/ArrowUp but has no case for
+     mute at all — no keyboard equivalent exists in the implementation,
+     let alone a test for one. (Note: §13.1's own canonical keyboard
+     list — Space, Left/Right, Up/Down — does not itself list a mute
+     key, so this may be a pre-existing spec ambiguity rather than
+     solely 2B's miss, but as shipped neither the feature nor a test for
+     it exists.)
+   - ArrowDown → onOpenSearch and ArrowUp → onOpenSaved ARE implemented
+     correctly in StackScreen.tsx (verified by reading the switch
+     statement) but StackScreen.test.tsx has zero test coverage for
+     either — only ArrowRight/ArrowLeft/Space are exercised. This is a
+     real coverage gap for behavior that already exists in code.
+   - §5.3's "tap next-up preview is a no-op" and §5.6's "tap card body
+     is a no-op" are untested (component code wasn't inspected for
+     these specific no-ops beyond what's visible; no test asserts
+     either). Minor, but a gap against "§5 all."
+   These fall on the edge of 2B's cited test scope (§15.2 cites
+   screen-state rendering + safe-text rendering specifically, not full
+   keyboard-parity per §15.10, which is more naturally Task 4A's
+   territory since swipe wiring is explicitly deferred to 4A per
+   BuildPlan). I'm flagging them as real, currently-uncovered gaps
+   rather than blocking the narrow §15.2 gate on them, since the task's
+   own cited tests (per-screen-state + safe-text) are genuinely
+   satisfied.
+
+Verdict: Task 2B's own cited checkpoint (§15.2: per-screen-state
+rendering + safe-array text rendering regression) IS met — 28/28 tests
+green, genuinely covering idle/loading/empty-result/error states and a
+real (not superficial) XSS-injection proof, plus lint/typecheck/build
+all independently confirmed clean. The tester gate for 2B specifically,
+as scoped by BuildPlan, is MET.
+Two things the next reviewer (adversarial-generalist) should not treat
+as closed, though: (a) the usePlaybackEngine mute-sync test is
+intermittently flaky due to an unawaited wake-lock promise race in 2D's
+own module — a real bug, not a 2B regression, but currently
+undocumented anywhere as a known flake; (b) mute has no keyboard
+equivalent in StackScreen.tsx at all, and ArrowUp/ArrowDown panel
+navigation, while correctly implemented, has zero test coverage — both
+worth closing before Task 4A/adversarial review treats keyboard parity
+as done.
+
+[2026-07-04T13:00:00] TASK 2A VERIFY — START
+Verifying senior-frontend-developer's Task 2A completion (app shell,
+vite-plugin-pwa, Zotero OAuth callback route, Lighthouse CI) against
+BuildPlan.md lines 452-463 and SPEC.md §11.1/§11.5/§11.6/§15.5. Also
+auditing the concurrent-npm-install incident flagged in 2A's PIVOT entry
+(msw/@tanstack/react-query/zustand pruned then restored) for lockfile
+consistency via `npm ci`, and checking whether the full 2A/2B/2C/2D
+frontend suite still passes together, not just 2A's claimed subset.
+
+[2026-07-04T15:00:00] TASK 2A VERIFY — PIVOT
+Mid-verification, `npx vitest run` twice returned different totals
+(23 files/112 tests, then 22/1 failing) because an untracked scratch
+file `frontend/src/playback/_race_repro.test.ts` was being actively
+added/removed by a concurrently-running agent process in this same
+shared working directory while I was testing. That file's one test
+(`does not cause duplicate speak() calls ... when play() double-invoked
+synchronously in one tick`) failed with `expected 2 to be 1` — i.e. it
+demonstrates a real re-entrancy bug in 2D's `usePlaybackEngine` (two
+synchronous `play()` calls in one tick currently issue two `speak()`
+calls instead of being guarded to one). This is outside 2A's scope
+(2A never touched `src/playback/`) and the file was untracked/removed
+again before I could attribute it to a named agent/log entry — flagging
+it here rather than silently, since it's a real bug surfaced by someone
+else's in-flight work and should not get lost. It is NOT counted against
+2A's own gate below. After the file disappeared, three consecutive
+`npx vitest run` invocations were stable at 21 files / 81 tests, all
+passing, matching both 2A's and 2D's own claimed counts.
+
+[2026-07-04T15:10:00] TASK 2A VERIFY — COMPLETE
+Scope: BuildPlan.md lines 452-463 (Task 2A), SPEC.md §11.1/§11.5/§11.6,
+test requirement §15.5 (Lighthouse CI installability).
+
+1. Full frontend suite (`npx vitest run`, no filters), run 3x for
+   stability after the transient scratch-file noise above: stable at
+   Test Files 21 passed (21) / Tests 81 passed (81). Matches 2A's
+   ("21 files / 81 tests") and 2D's independent claim exactly. No test
+   that passed in isolation failed when the full suite ran together
+   (aside from the unrelated transient file addressed in the PIVOT
+   entry above, which was not part of the committed 2A/2B/2C/2D work).
+
+2. package.json / package-lock.json audit for the concurrent-install
+   incident (msw, @tanstack/react-query, zustand pruned then restored
+   by 2A mid-task):
+   - package.json: "@tanstack/react-query": "^5.101.2" and "zustand":
+     "^5.0.14" under dependencies; "msw": "^2.14.6" under devDependencies
+     — present, sane semver ranges, matches 2A's log claim verbatim.
+   - package-lock.json (lockfileVersion 3): node_modules/msw -> 2.14.6,
+     node_modules/@tanstack/react-query -> 5.101.2, node_modules/zustand
+     -> 5.0.14 all resolved and consistent with package.json ranges.
+   - `rm -rf node_modules && npm ci`: succeeded, "added 868 packages,
+     audited 869 packages in 6s" — 0 ERESOLVE errors, 0 peer-dependency
+     warnings; only generic upstream deprecation warnings (inflight,
+     rimraf, glob, source-map, uuid — all transitive to @lhci/cli's own
+     Lighthouse 11.4.0 dependency tree, unrelated to the restored three
+     packages). `npm ls @tanstack/react-query zustand msw` shows a single
+     deduped version of each (msw deduped once under vitest/@vitest/mocker,
+     as expected) — no conflicting parallel version trees.
+   - path-to-regexp (the specific package 2A's log said got a broken
+     resolution mid-race): now cleanly split into
+     node_modules/path-to-regexp@0.1.13 (root) and
+     node_modules/msw/node_modules/path-to-regexp@6.3.0 (msw's own,
+     nested) — matches 2A's claim that each dependency tree carries its
+     own non-conflicting copy. No stray/duplicate/orphaned lockfile
+     entries found.
+   Verdict on this specific worry: the lockfile is genuinely consistent
+   and reproducible via `npm ci`, not merely "happens to work" in the
+   pre-existing node_modules state.
+
+3. 2A's own claimed items, independently re-run (not taken from its log):
+   - `npm run lint` (eslint . --max-warnings 0): clean, 0 output.
+   - `npm run typecheck` (tsc -b --noEmit): clean, 0 output.
+   - `npm run build`: succeeded; vite-plugin-pwa generated
+     dist/manifest.webmanifest, dist/sw.js, dist/workbox-*.js, precache
+     "14 entries (243.71 KiB)".
+   - Zotero OAuth callback route: `npx vitest run src/routes/` = 2 files
+     / 10 tests passing, including the no-raw-HTML regression test
+     (ZoteroCallbackRoute.test.tsx: renders `<b>hi</b>` as literal text
+     via getByText, asserts `queryByRole('strong')` is absent) — this is
+     a real, meaningful assertion, not vacuous.
+   - `npm run lighthouse`: exit code 0. Inspected the actual LHR JSON
+     (.lighthouseci/lhr-*.json): lighthouseVersion 11.4.0,
+     categories.pwa.score = 1, and all six named audits
+     (installable-manifest, viewport, maskable-icon, themed-omnibox,
+     splash-screen, content-width) individually score 1.
+     .lighthouseci/assertion-results.json = [] (empty — no assertion
+     failures). Confirms the claim, not just a green process exit.
+
+4. @lhci/cli@0.13.0 pin: present in package.json/lockfile and confirmed
+   via `npm ls @lhci/cli` -> 0.13.0. The claim that newer Lighthouse
+   versions dropped the PWA installability audit category is plausible
+   and now empirically corroborated in this environment: the pinned
+   0.13.0 bundles Lighthouse 11.4.0, which is the version that actually
+   produced the six PWA audits above. I did not attempt to install a
+   newer @lhci/cli to independently reproduce the claimed removal
+   upstream — took 2A's characterization of the upstream change at face
+   value, but confirmed the *consequence* (audits present at the pinned
+   version) directly.
+
+5. Other artifacts of the concurrent-install race: none found beyond
+   what's covered in items 2 and the PIVOT entry above. No duplicate
+   lockfile entries, no leftover node_modules inconsistency (rebuilt
+   from scratch via `npm ci` and got the same passing suite), no
+   isolation-only-passing test found among the 21 committed test files.
+
+Coverage note (not a failure, a gap): no test asserts that the
+vite-plugin-pwa precache actually *excludes* PubMed/paper-data API
+responses (§11.5's explicit requirement) — this is currently only
+implicit in vite.config.ts's file-extension globPatterns (js/css/html/
+svg/png/ico/woff2) and never asserted by a test reading the generated
+precache manifest. Lighthouse's installability audits don't check this
+either. Flagging as a real, if minor, coverage gap for whoever revisits
+§15.5 in Tier 5B, not something to hold up this checkpoint over.
+
+Verdict: Task 2A checkpoint MET. All items 2A claimed (vite-plugin-pwa
+manifest+precache, Zotero OAuth callback route with no-raw-HTML
+regression test, Lighthouse CI config + @lhci/cli@0.13.0 pin, and clean
+lint/typecheck/build/vitest) were independently re-run by me, not taken
+on the strength of the log, and all passed. The concurrent-install
+incident (msw/@tanstack/react-query/zustand pruned then restored) left
+the repo in a genuinely clean, reproducible state — `npm ci` from the
+current lockfile succeeds with no peer-dependency conflicts and
+deduped, non-conflicting dependency trees — not merely an
+accidentally-working node_modules snapshot. Full Tier 2 exit gate is
+NOT being asserted here (that requires 2B/2C/2D's own cited tests to be
+independently verified against §15.2/§11.2 etc., which is outside this
+task's scope) — only 2A's own checkpoint is in scope and is met.
+
+[2026-07-04T15:10:00] TASK 1B VERIFY — START
+Verifying senior-backend-developer's Task 1B (PubMed client, SPEC.md §7
+all) against BuildPlan.md lines 400-414 and §15.1/§15.8. Read the agent's
+COMPLETE entry first. At time of check, 1C's files (app/auth/oauth.py,
+app/integrations/zotero.py, tests/test_oauth.py, test_oauth_session_binding.py,
+test_zotero.py) exist and pass; 1D's files (app/text/tokenize.py,
+normalize.py) exist but have no corresponding test files yet — 1D is
+mid-flight, its ruff/mypy issues below are explicitly not attributed to 1B.
+
+[2026-07-04T15:32:00] TASK 1B VERIFY — COMPLETE
+
+1. Test run: `pytest -v` from backend/ => 57 passed, 0 failed, in 0.95s
+   wall time (0.22s for just test_pubmed_client.py + test_icite_client.py,
+   confirming no real sleeps anywhere in the suite). test_pubmed_client.py:
+   15 passed. test_icite_client.py: 5 passed. Total = 20 new tests, matching
+   the claim exactly. (Total suite count is 57, not 21+20=41, because 1C's
+   test_oauth.py/test_oauth_session_binding.py/test_zotero.py — 22 tests —
+   are also present and passing at this snapshot; 1C was apparently further
+   along than "may or may not be done" by the time I ran this. This is not
+   a discrepancy in 1B's claim, just a timing note — 1B's own log correctly
+   states 21 pre-existing + 20 new as of when 1B finished.)
+
+   `ruff check .` from backend/ is NOT currently clean: two errors,
+   both in app/text/tokenize.py (F401 unused import of
+   `normalize_for_speech`, F811 redefinition of same at line 312) — this
+   file belongs to Task 1D, not 1B, and 1B's own files
+   (app/integrations/pubmed.py, icite.py) are untouched by these errors.
+   Confirmed via `ruff check .` output referencing only tokenize.py lines.
+   Not a 1B regression.
+
+   `mypy app/` project-wide: 2 errors — app/auth/oauth.py:128
+   (no-any-return, pre-existing, confirmed to be Task 1C's file by content
+   inspection: it implements the Zotero OAuth 1.0a handshake, nothing to
+   do with pubmed.py/icite.py) and app/text/tokenize.py:306
+   (no-untyped-def, Task 1D's in-progress file). `mypy app/integrations/pubmed.py
+   app/integrations/icite.py` in isolation => Success, no issues. The
+   pre-existing oauth.py error is correctly out-of-scope for 1B as claimed.
+
+2. respx/network-call audit: grepped app/integrations/pubmed.py, icite.py,
+   and both test files for bare `httpx.get`/`httpx.post`/`requests.get`/
+   `requests.post` — none found. Both clients only use
+   `httpx.AsyncClient(...).get(...)`, and every single test wraps calls in
+   `respx.mock(assert_all_called=True)` (or `assert_all_called=False` only
+   for the explicit "no request should be made" empty-input tests, which
+   then assert `route.call_count == 0`). A real network call would fail
+   respx's unmocked-request guard, not silently succeed — genuine mocking,
+   not decorative.
+
+3. Fake-clock/pacing verification: `RateLimiter`/`PubMedClient` take an
+   injectable `Clock` dataclass (app/integrations/pubmed.py lines 77-116,
+   205-216) defaulting to `time.monotonic`/`asyncio.sleep` but fully
+   substitutable. Tests use a `FakeClock` class (test_pubmed_client.py
+   lines 44-61) whose `sleep()` advances a virtual float counter instead
+   of awaiting real time — confirmed by the whole 20-test file running in
+   0.22s total, including a test that claims a 2-second Retry-After wait
+   (test_backoff_retries_after_429_then_succeeds asserts
+   `2.0 in fake.sleep_calls`, not just "no crash" — genuinely checks the
+   computed delay value came from the Retry-After header, and
+   test_esearch_uses_shared_rate_limiter_across_calls independently
+   asserts the computed inter-call wait equals `1/3` for the no-API-key
+   3 req/s rate). test_backoff_raises_after_retries_exhausted and
+   test_network_error_raises_pubmed_unavailable confirm the bounded-retry
+   exhaustion path raises PubMedUnavailableError rather than looping
+   forever or crashing with a raw httpx exception.
+   Zero-result path: test_esearch_zero_results asserts count==0 and
+   pmids==[] against fixtures/pubmed/esearch_zero_results.json — sane
+   per §7.9. (Note: the *caller-side* "zero pmids => no ESummary/EFetch
+   call" contract is enforced by esummary()/efetch() themselves returning
+   [] immediately on empty input, each verified by its own
+   assert_all_called=False + call_count==0 test — this is the right level
+   for 1B's own file scope; the actual queue/UI empty-state behavior is
+   a later Tier's concern per §7.9's own text.)
+   iCite degradation: test_icite_client.py covers all three distinct
+   failure modes as required — connection error (httpx.ConnectError),
+   5xx (Response(503)), and malformed JSON (Response(200, text="not json"))
+   — each independently asserting `available is False` and `counts == {}`,
+   not just one representative failure mode standing in for all three.
+
+4. §13.4 extraction against the real fixture: read
+   fixtures/pubmed/efetch_response.xml directly (not just the test file).
+   The fixture's actual XML nesting is Article > Journal > Title (not a
+   top-level Title), Article > Language, Article > PublicationTypeList >
+   PublicationType (with a genuine "Retracted Publication" entry for PMID
+   38279813 sitting alongside "Journal Article" in the same list), and
+   PubmedData > ArticleIdList > ArticleId as a *sibling* of MedlineCitation
+   (not a child) with a doi-typed entry for 38279812 and no doi entry at
+   all for 38279813. The parser (_parse_one_article) correctly navigates
+   this exact structure: `article_body.find("Journal/Title")`,
+   `article_body.find("Language")`, `article_body.findall("PublicationTypeList/PublicationType")`,
+   and separately walks `article_el.findall("PubmedData/ArticleIdList/ArticleId")`
+   from the PubmedArticle element (not the MedlineCitation element) with an
+   explicit comment explaining why. This is not a parser hand-fitted to a
+   trivial XML snippet — it matches the real multi-record fixture's actual
+   shape, including the retracted-flag derivation correctly firing only
+   for the PMID whose PublicationTypeList contains "Retracted Publication"
+   and not the other two records, and the language field correctly
+   returning "fre" for the French no-translation record (37000001) instead
+   of defaulting to "eng".
+
+5. §7.9 interpretation check: SPEC.md §7.9 text (lines 1301-1304) reads:
+   "Rate-limit errors ({"error":"API rate limit exceeded"}) are a
+   backend-only concern... the backend should queue/retry with backoff
+   rather than surfacing raw API errors to the user" — it describes the
+   error by JSON body, not HTTP status code, and does not contradict
+   treating HTTP 429 as the primary signal. 1B's PIVOT log entry
+   documents deferring to real, externally-verifiable NCBI behavior (429 +
+   Retry-After) as primary and the spec's literal JSON-body match as a
+   secondary/defensive check — this is a reasonable, appropriately
+   flagged reading, not a silent deviation from spec, and does not
+   conflict with anything §7.9 actually asserts.
+
+Coverage note (not a failure, a completeness observation): the outbound
+rate-limiter tests correctly stay confined to `pubmed.py`'s own code path
+per §15.8's "tested as two distinct code paths" instruction — no
+conflation with the inbound per-session limiter, which correctly isn't
+tested here (that's Task 3D's scope per BuildPlan). This separation is
+correctly maintained.
+
+VERDICT: Task 1B checkpoint MET. All 20 of 1B's own cited tests
+(test_pubmed_client.py: 15, test_icite_client.py: 5) pass, genuinely
+respx-mocked with no real network surface, genuinely fake-clock-driven
+with no real sleeps, correctly parse the real (not simplified)
+fixtures/pubmed/efetch_response.xml structure for §13.4's
+retracted-flag/Language extraction, and cover all three iCite failure
+modes independently. `ruff check .`/`mypy app/` are not fully clean
+project-wide, but both outstanding issues are confirmed to live in files
+1B does not own (app/text/tokenize.py — Task 1D, in progress;
+app/auth/oauth.py — Task 1C) and 1B's own files pass both tools in
+isolation with zero issues. The §7.9 429-as-primary-signal interpretation
+is a reasonable, explicitly-documented reading of the spec, not a
+shortcut. No blocking findings against 1B itself.
+
+[2026-07-04T14:00:00] TASK 1D VERIFY — START
+Verifying senior-backend-developer's Task 1D (text normalization &
+tokenizer) against SPEC.md §6.3-§6.5, §13.3, BuildPlan.md lines 428-445
+(§15.1/§15.9 tokenizer half). This is the Wave 2 checkpoint gating 2D's
+already-merged frontend consumer. Will independently run pytest/ruff/
+mypy, hand-verify the golden-file corpus char-offset invariant live in
+Python, re-check TITLE/GENERIC/citation disambiguation classes, confirm
+CONTRACTS.md field-shape match, and check the AbstractSection interface
+choice against entities.py for a 3A integration gap.
+
+[2026-07-04T14:00:00] TASK 1C VERIFY — START
+Verifying BuildPlan.md Task 1C (Zotero client & OAuth handshake) against
+SPEC.md §8 (all), §10.2's OAuth addendum, §9.6, and §15.1/§15.7's
+automated-half test requirements. Read senior-backend-developer's 1C
+START/PIVOT/COMPLETE log entries, Task 1A's build log and
+backend/app/middleware/session.py in full (OAuthSessionBinding/
+oauth_session_binding), BuildPlan.md lines 415-426, SPEC.md §8.1-§8.9 and
+§10.2, and the actual source: backend/app/auth/oauth.py,
+backend/app/integrations/zotero.py, backend/tests/test_oauth.py,
+backend/tests/test_zotero.py, CONTRACTS.md §3 (Zotero push per-item
+shape), fixtures/zotero/item_creation_response.json, and pyzotero's
+installed source (v1.13.2) to independently check the backoff/transport
+claims in the PIVOT entry rather than trusting them.
+
+[2026-07-04T14:20:00] TASK 1C VERIFY — COMPLETE
+
+1. Full backend suite run from backend/ using backend/.venv (a real venv
+   existed; system Python lacked sqlalchemy — noted so this doesn't look
+   like a skipped step): `.venv/bin/pytest -v` => 118 passed, 0 failed,
+   1 warning (unrelated httpx/starlette.testclient deprecation notice).
+   This includes all 9 of test_oauth.py's tests and all 7 of
+   test_zotero.py's tests, both fully green. Note: 1C's own COMPLETE
+   entry cites "57 passed" — that was the correct count for the full
+   suite *at the time 1C finished*, before Task 1D's tokenizer/
+   normalization tests (61 more, in test_tokenize.py/test_normalize.py)
+   were added by a concurrent Wave-2 sibling; not a discrepancy, just an
+   artifact of two tasks finishing test files around the same time. All
+   of 1C's own tests are present and passing in the current 118.
+   `ruff check .` => "All checks passed!" (project-wide, not just 1C's
+   files). `mypy app/` => "Success: no issues found in 21 source files"
+   (project-wide). Both fully clean, not just clean-in-isolation.
+
+2. Callback redirect fixed/non-dynamic: confirmed by direct grep of
+   app/auth/oauth.py — `start_handshake(session_id: str)` takes no
+   redirect/callback parameter at all and reads only
+   `settings.zotero_callback_url`; `post_auth_redirect_url()` takes zero
+   arguments and returns only `settings.zotero_post_auth_redirect_url`.
+   No occurrence of `request.query_params`, `.headers.get(...)`,
+   `Referer`, `return_to`, or `next` anywhere in the file. Test
+   `test_start_handshake_never_sends_a_request_supplied_callback`
+   additionally asserts the real signed OAuth1 `Authorization` header
+   (captured via a `responses.add_callback`, not just inspecting Python
+   call args) carries exactly the fixed, percent-encoded
+   `zotero_callback_url` — this is a genuine wire-level assertion, not a
+   unit-level stand-in. §8.2's open-redirect fix is real, not decorative.
+
+3. Reuse (not reimplementation) of Task 1A's binding primitive:
+   confirmed — `from app.middleware.session import oauth_session_binding`
+   is imported directly in oauth.py; `start_handshake` calls
+   `oauth_session_binding.store(...)`, `complete_handshake` calls
+   `oauth_session_binding.resolve(...)`. No parallel binding/TTL/dict
+   logic exists in oauth.py itself. Read middleware/session.py's
+   `OAuthSessionBinding` in full: single-use (`pop` on every `resolve`
+   call regardless of outcome), `secrets.compare_digest` for the
+   session-id comparison (correct — avoids a timing side-channel on an
+   otherwise cheap string compare), TTL-bounded via `time.monotonic()`.
+   test_oauth.py's `_isolated_binding` fixture correctly monkeypatches a
+   *fresh* `OAuthSessionBinding()` per test rather than sharing the
+   process-wide singleton, so tests can't leak state into each other —
+   this is a real regression risk this project should keep watching per
+   the required adversarial session-binding review that follows this
+   verification.
+
+4. CONTRACTS.md §3 `ZoteroPushResult` shape vs zotero.py's actual output:
+   byte-for-byte match. CONTRACTS.md: `{pmid: string, status:
+   "success"|"failure", zotero_item_key?: string, error?: {code:
+   string, message: string}}`. zotero.py's `ZoteroPushResult` dataclass:
+   `pmid: str`, `status: Literal["success","failure"]`,
+   `zotero_item_key: str | None = None`, `error: ZoteroPushError | None
+   = None` where `ZoteroPushError` is `{code: str, message: str}`. Also
+   spot-checked frontend/src/api/types.ts's `ZoteroPushResult` interface
+   (Task 2C) — identical field names/optionality to both CONTRACTS.md
+   and the backend dataclass. No drift found.
+
+5. Partial-batch-failure fixture: confirmed
+   test_push_items_reports_partial_batch_failure_per_pmid loads
+   fixtures/zotero/item_creation_response.json verbatim via a
+   `_load_fixture` helper (not hand-rolled dict literals) and asserts
+   against its exact index-0-succeeds/index-1-fails shape (pmid
+   38279812 -> success/XJ2K9F3P, pmid 38279813 -> failure/
+   service_unavailable). Other zotero.py tests
+   (test_create_collection_returns_new_key,
+   test_push_items_builds_the_pinned_item_shape,
+   test_push_items_chunks_into_batches_of_50,
+   test_push_items_marks_whole_batch_as_failure_when_call_raises) do use
+   hand-rolled response dicts, but those are legitimately testing
+   different code paths (item-shape construction, batch chunking,
+   whole-batch exception handling) that the single partial-failure
+   fixture can't exercise on its own — this is reasonable test design,
+   not fixture-avoidance.
+
+6. `respx`-vs-`responses` pivot sanity-checked against actual installed
+   library source, not taken on faith: `requests_oauthlib/
+   oauth1_session.py` (v2.0.0, installed) does `import requests` and
+   `OAuth1Session` subclasses `requests.Session` — confirmed `respx`
+   (httpx-only) genuinely cannot intercept these calls, and `responses`
+   is the correct, real `requests`-equivalent stubbing tool. One nuance
+   worth flagging precisely rather than glossing over: the installed
+   `pyzotero` (v1.13.2, satisfies the `>=1.5` pin) actually uses
+   `httpx.Client` internally now, not `requests` — so the specific
+   framing "`pyzotero`... built on the `requests` library" in some
+   paraphrases would be wrong for this pyzotero version. However,
+   re-reading 1C's actual PIVOT log text, it does NOT make that claim
+   about pyzotero specifically — it says `requests-oauthlib` is
+   built on `requests`, which is correct, and separately notes pyzotero
+   isn't used for the OAuth handshake at all. test_zotero.py also never
+   invokes respx/responses — it correctly patches
+   `zotero.Zotero.create_items`/`create_collections`/`everything` at the
+   Python-method level via `unittest.mock.patch.object`, which is a
+   legitimate (if lower-fidelity) test style for that module, but is
+   NOT "wire-level stubbing of the real Zotero endpoints" the way
+   test_oauth.py's `responses`-based tests are — flagging this as a
+   coverage-depth note: zotero.py's tests never exercise a real
+   HTTP-layer round trip (URL construction, headers, JSON body) the way
+   the OAuth tests do, only the response-translation logic downstream
+   of pyzotero's own HTTP layer. Not a defect against SPEC.md's cited
+   §15.1 (which only asks for "mocked partial-batch push reports correct
+   per-item status" — met), but worth naming as a real gap in
+   HTTP-request-shape coverage for `zotero.py` specifically, separate
+   from the request/response-shape coverage `test_oauth.py` has.
+
+7. pyzotero backoff/Retry-After handling: verified directly against
+   installed pyzotero (v1.13.2) source rather than trusting the log's
+   claim. `_client.py`'s `create_items` calls `self._check_backoff()`
+   before the POST and `self._post_check(req)` after, which calls
+   `error_handler(self, resp, exc)` on any HTTP error and records any
+   `Backoff`/`Retry-After` response header via `_set_backoff`;
+   `create_collections`'s `_batch_update`/write path does the same via
+   `self._check_backoff()` per chunk. `DEFAULT_NUM_ITEMS = 50` in
+   pyzotero itself matches zotero.py's own `ITEM_BATCH_SIZE = 50`
+   constant, consistent with §8.6. Confirmed: zotero.py is not silently
+   missing rate-limit handling — it is genuinely inherited from
+   pyzotero, as claimed.
+
+No binding-related defect found — flagging for the follow-up adversarial
+session-binding review that this is otherwise clean: single-use via pop,
+constant-time session comparison, TTL-checked, isolated per-test fixture.
+The one thing worth that review's specific attention: `OAuthSessionBinding`
+is an in-process singleton (documented explicitly as not safe for a
+multi-worker-process deployment) — fine today per §10.6/§12.2's
+single-process model, but is a latent correctness assumption an
+adversarial reviewer should treat as load-bearing infrastructure, not an
+implementation detail.
+
+VERDICT: Task 1C checkpoint MET. All of 1C's own cited tests
+(test_oauth.py: 9, test_zotero.py: 7) pass; full backend suite (118
+tests) passes; `ruff check .` and `mypy app/` are both clean
+project-wide. §8.2's open-redirect fix and §10.2's session-binding reuse
+are both genuinely implemented, not just asserted. CONTRACTS.md's
+ZoteroPushResult shape matches byte-for-byte on both the backend
+dataclass and the frontend's already-built typed hook. One coverage gap
+worth tracking (not blocking the checkpoint): zotero.py's tests mock at
+the pyzotero-method level, not the HTTP-wire level like test_oauth.py
+does, so URL/header/body construction for the actual Zotero REST calls
+(collections list/create, item push) is never independently verified the
+way the OAuth request-signing path is.
+
+[2026-07-04T14:35:00] TASK 1D VERIFY — COMPLETE
+Scope: BuildPlan.md Task 1D (backend/app/text/normalize.py,
+backend/app/text/tokenize.py, backend/tests/test_normalize.py,
+backend/tests/test_tokenize.py) against SPEC.md §6.3-§6.5, §13.3,
+BuildPlan.md lines 428-445, CONTRACTS.md §1. Ran the full backend suite
+myself (not trusting the self-report), plus independent live-Python
+checks of the char-offset invariant and abbreviation-class generalization
+beyond the corpus's literal examples.
+
+1. `pytest -v` (backend/.venv/bin/python -m pytest -v): 118/118 passing,
+   confirmed count and every individual test name (57 pre-existing + 61
+   new in test_normalize.py/test_tokenize.py, matching the claim).
+   `ruff check .` => "All checks passed!". `mypy app/` => "Success: no
+   issues found in 21 source files". All three claims independently
+   verified true.
+
+2. Golden-file corpus: confirmed via direct inspection of test_tokenize.py
+   that it loads `fixtures/tokenizer/abbreviation_corpus.json` from disk
+   at test-collection time (`_load_corpus()`) and parametrizes over every
+   entry in `cases` (not a hand-copied subset) — 11 cases x 2 tests
+   (text-equality + exact-slice) = 22 parametrized tokenizer tests, all
+   present and passing. I additionally wrote and ran my own standalone
+   script (not reusing the test file) that: (a) reloads the same fixture
+   JSON, calls `tokenize_sentences()` directly, and independently asserts
+   both `actual == expected_sentences` AND
+   `text[span.start:span.end] == span.text` for all 11 cases — all pass;
+   (b) builds a multi-section, multi-sentence abstract through
+   `build_segmented_abstract()` and independently checks
+   `display_abstract[char_start:char_end] == display_text` for every
+   segment including a section header — all 5 segments matched exactly.
+   This is a live re-verification, not a re-read of the existing
+   assertion, and it confirms the off-by-one class of bug flagged in the
+   task brief is NOT present here.
+
+3. Disambiguation classes read directly in `_is_sentence_boundary`
+   (tokenize.py lines 130-173). Title-abbreviation set
+   (`_TITLE_ABBREVIATIONS`) includes dr/mr/mrs/ms/prof/st/rev/sr/jr/hon/
+   gen/col/capt/lt/sgt — genuinely generalizes past "Dr." alone. I tested
+   this directly (not just trusting the set's presence) with three cases
+   outside the corpus - "Mrs. Chen presented...", "Prof. Kim
+   supervised...", "St. Mary's Hospital enrolled..." - all correctly
+   produced 2 sentences with the title glued to what follows, matching
+   the "Dr." behavior. The "et al." citation class is correctly the one
+   path that *does* check next-token capitalization
+   (`is_et_al: return next_upper`), confirmed against both corpus cases
+   (mid-clause: no split; true-sentence-end: splits) and my own two
+   additional cases.
+
+4. Bug-fix claim (et al. bigram lookback skipping whitespace): no git
+   history exists for tokenize.py (untracked/uncommitted in this
+   worktree, consistent with the rest of Wave 2's files), so I could not
+   diff before/after. Verified the *current* behavior directly instead:
+   the lookback in `_is_sentence_boundary` (lines 143-149) explicitly
+   walks back over `text[j-1].isspace()` before capturing the second
+   token, and I confirmed it correctly detects "et al." as a bigram
+   across a double space, a tab, and a newline between "et" and "al." (3
+   extra cases beyond the corpus, all correct) — the fix is real and
+   robust to whitespace variation, not just the single-space corpus
+   example.
+
+5. CONTRACTS.md §1 field names/types checked byte-for-byte against
+   `AbstractSegment`/`SegmentedAbstractResponse` in tokenize.py: index,
+   kind, section_label, display_text, spoken_text, char_start, char_end,
+   pause_class, pmid, narration_unavailable, segments — exact match,
+   including the "very first segment overall is always structural"
+   detail and the exact worked-example transformation ("Fig. 2, e.g. ...
+   vs." -> "figure two, for example ... versus") which I additionally
+   confirmed reproduces byte-for-byte via normalize_for_speech.
+
+6. §13.3 `is_narration_unavailable()`: tested with 7 parametrized cases
+   including realistic MEDLINE 3-letter codes ("eng"/"fre"/"ger") against
+   BCP-47-style locale strings ("en"/"en-US"/"en-GB"), a case-insensitivity
+   case, a missing-language permissive case, and a bare-2-letter-code
+   case. This is a real match/mismatch pair using realistic shapes, not
+   two arbitrary strings — satisfies the ask.
+
+7. Handoff-note check (AbstractSection interface): confirmed in
+   entities.py that `Paper.display_abstract` is a flat `str | None`
+   column with no section metadata, so 1D's PIVOT reasoning (structured
+   `AbstractSection(label, text)` input rather than a flat-string
+   parameter) is accurate and justified.
+   HOWEVER — found two concrete integration gaps, not previously flagged
+   by 1D or 1B:
+   (a) `backend/app/integrations/pubmed.py` (Task 1B) independently
+   defines its OWN frozen dataclass named `AbstractSection(label: str |
+   None, text: str)` (pubmed.py line 147) — structurally identical to but
+   a completely different type from `app.text.tokenize.AbstractSection`.
+   I confirmed this directly: `PubmedSection is TokenizeSection` -> False,
+   `isinstance(PubmedSection(...), TokenizeSection)` -> False. Task 3A,
+   wiring `EFetchArticle.abstract_sections` (a `list[pubmed.
+   AbstractSection]`) into `build_segmented_abstract(sections=...)`
+   (typed `list[tokenize.AbstractSection]`), will get a mypy type error
+   passing one directly into the other and will have to convert between
+   them — a small but real re-implementation surface neither 1B's nor
+   1D's log anticipated. Cheap fix: either 1D imports and reuses
+   `pubmed.AbstractSection` instead of declaring its own, or both import
+   a single shared definition. Flagging as a finding for 3A's owner (or
+   whoever reconciles Wave 2 merges) to fix before 3A starts, not
+   something I patched myself.
+   (b) `entities.py` also defines `Paper.spoken_abstract: str | None`
+   (a sibling column to `display_abstract`), and CONTRACTS.md's own prose
+   says each segment's `spoken_text` is "sourced from Paper.
+   spoken_abstract" — implying a flattened spoken-text string is expected
+   to exist alongside the flattened `display_abstract`. I confirmed by
+   grep that `spoken_abstract` is referenced nowhere else in
+   backend/app/ — `build_segmented_abstract()` returns only
+   `(display_abstract, SegmentedAbstractResponse)`, with no analogous
+   flattened spoken string returned for persistence. Task 3A will have to
+   join `segment.spoken_text` values itself to populate `Paper.
+   spoken_abstract`, which is a (small) re-implementation of a flattening
+   decision that per BuildPlan's own "lives in exactly one place" framing
+   for this task probably belongs in `build_segmented_abstract()` too.
+   Not a blocking bug — the per-segment spoken_text is complete and
+   correct — but a real interface gap 1D's own "Open" note did not
+   surface.
+
+Overall assessment: the tokenizer/normalizer implementation itself is
+strong — all cited tests pass, the golden corpus is fully and correctly
+exercised (not a subset), the char-offset invariant holds under my own
+independent re-check, disambiguation classes generalize sensibly beyond
+the corpus's literal examples, and the whitespace bug-fix is real and
+robust. Test coverage for §15.1/§15.9's tokenizer half is thorough, not
+superficial.
+
+Verdict: Task 1D's own test suite is GREEN and its cited tests genuinely
+satisfy §15.1/§15.9 for the tokenizer/normalizer logic itself — that
+part of the checkpoint IS met. However, I am flagging finding 7(a) (duplicate
+`AbstractSection` type between pubmed.py and tokenize.py) and 7(b)
+(no flattened `spoken_abstract` returned for persistence) as real,
+concrete integration gaps for Task 3A that should be resolved — ideally
+by 1D/1B reconciling the type duplication and 1D adding a flattened
+spoken-text return value — before 3A is started, to avoid exactly the
+"expensive integration bug later" this checkpoint exists to prevent. I
+am not blocking Task 1D's own merge on this (its own scope and tests are
+correct and complete), but the Wave 2 exit gate ("independently green
+and merged") should not be read as "no cross-task interface work
+remains" — these two items are outstanding cross-task wiring debt that
+belongs on whoever picks up Task 3A's brief.
+
+[2026-07-04T16:00:00] TASK 2D RE-VERIFY — START
+Re-verifying senior-frontend-developer's post-review re-entrancy fix
+(TASK 2D — PIVOT (post-review fix), 2026-07-04T01:10:00) against
+adversarial-generalist's TASK 2D REVIEW finding #1 (play() double-speak()
+via synchronous status-state guard). Checking: (1) usePlaybackEngine.ts
+guards on a synchronous ref not `status` state, (2) new "play()
+re-entrancy" tests pass, (3) those tests are non-vacuous (fail on
+reverted guard, pass on fix, verified myself), (4) full frontend suite
+83/83, (5) eslint/tsc/build clean, (6) wake-lock comment is
+documentation-only with no functional change.
+
+[2026-07-04T16:15:00] TASK 2D RE-VERIFY — COMPLETE
+Scope: §11.3 (single playback engine), §15.9 (TTS sync/re-entrancy
+regression), §6.5/§13.2 (mute clock, wake lock — unchanged by this fix,
+re-confirmed still green).
+
+1. Code inspection (frontend/src/playback/usePlaybackEngine.ts):
+   confirmed `play()` (line 311: `if (statusRef.current === "playing")
+   return;`) and `pause()` (line 337: `if (statusRef.current !==
+   "playing") return;`) both guard on the synchronous `statusRef`, not
+   the `status` state value. `setStatusBoth()` (lines 155-158) writes
+   `statusRef.current` and calls `setStatus()` together on every
+   transition (play/pause/cancel/finish), so `status` state is now used
+   only for UI re-render, never for a correctness-critical guard. Matches
+   the specialist's claimed fix exactly.
+
+2. Ran the new tests directly: `npx vitest run
+   src/playback/usePlaybackEngine.test.ts` -> 10/10 passing, including
+   both new cases in the "play() re-entrancy (§11.3, §15.9)" describe
+   block ("calls speak() exactly once when play() is invoked twice
+   synchronously in the same tick" and the triple-call variant).
+
+3. Non-vacuousness check (done myself, not taken on the specialist's
+   word): reverted the guard in play() from `if (statusRef.current ===
+   "playing") return;` back to `if (status === "playing") return;` and
+   re-ran the same test file. Result: both re-entrancy tests failed
+   exactly as predicted —
+   "calls speak() exactly once when play() is invoked twice
+   synchronously in the same tick": AssertionError: expected "vi.fn()"
+   to be called 1 times, but got 2 times (usePlaybackEngine.test.ts:262).
+   "calls speak() exactly once for three synchronous play() calls in the
+   same tick": AssertionError: expected "vi.fn()" to be called 1 times,
+   but got 3 times (usePlaybackEngine.test.ts:279).
+   Restored the fix, re-ran: 10/10 passing again, and `git status`/`git
+   diff --stat` confirmed the file was returned to its exact prior
+   state (no residual change left in the repo from this experiment).
+
+4. Full frontend suite: `npx vitest run` -> 21 files / 83 tests passing,
+   matching the claimed 83/83 (up from 81 pre-fix, the 2 new regression
+   tests).
+
+5. Static checks: `npx eslint src/playback/` clean (exit 0); also ran
+   `npx eslint .` project-wide, clean (exit 0). `npx tsc -b --noEmit`
+   clean (exit 0). `npm run build` succeeded end-to-end (tsc + vite
+   build + PWA precache manifest generated, exit 0).
+
+6. Wake-lock comment: read the `play()` body (lines 314-332) — the
+   `requestWakeLock().then((lock) => {...})` callback logic is unchanged
+   from the pre-review version described in adversarial-generalist's
+   TASK 2D REVIEW (checks `generation !== generationRef.current`, then
+   either releases the stale lock or writes `wakeLockRef.current = lock`
+   — a plain ref write in both branches, no React state setter touched).
+   A comment block was added directly above/around it documenting the
+   still-open, still-unexplained TASK 2B VERIFY mute-test flake and
+   explicitly stating this callback cannot be its direct cause, and
+   redirecting future investigation toward test-harness timing rather
+   than a state bug. No functional/behavioral change to this code path.
+   Caveat: frontend/src/playback/ is an entirely untracked/uncommitted
+   directory in this repo (no prior git commit exists to run `git diff`
+   against), so this confirmation rests on direct code reading plus
+   cross-referencing both build-log narratives (pre- and post-fix),
+   not a literal git diff — flagging this as a verification-method
+   limitation, not a doubt about the claim itself.
+
+Coverage note (unchanged from before, still applies): the wake-lock
+flake from TASK 2B VERIFY remains open and unexplained — this fix was
+never expected to resolve it and does not claim to; it is documented in
+code but not covered by any regression test, which is appropriate since
+neither this agent nor adversarial-generalist could produce a reliable
+repro to write one against.
+
+Verdict: TASK 2D re-entrancy fix VERIFIED. The guard now reads a
+synchronous ref (not React state), the two new regression tests
+correctly fail on the pre-fix code and pass on the fix (confirmed via
+independent revert-and-restore, not taken on trust), the full frontend
+suite is 83/83 green, eslint/tsc/build are all clean, and the wake-lock
+comment is documentation-only with no functional change. This closes
+adversarial-generalist's TASK 2D REVIEW finding #1 (SIGNIFICANT). Their
+finding #2 (mute-test flake, unresolved) and finding #3 (reporting
+mis-filed under TASK 2B VERIFY rather than TASK 2D VERIFY) remain open
+per their own log and are outside this fix's claimed scope.
+
+[2026-07-04T18:20:00] TASK 1B RE-VERIFY — START
+Re-verifying senior-backend-developer's post-review fix for the
+credential-leak bug found by adversarial-generalist ("TASK 1B REVIEW",
+finding #1: uncaught httpx.HTTPStatusError on non-429/5xx 4xx responses
+embedding NCBI_EMAIL/NCBI_API_KEY query params in cleartext). Read
+senior-backend-developer's "TASK 1B — PIVOT (post-review fix)" and "TASK
+1B — COMPLETE (re-verified after fix)" entries, and
+adversarial-generalist's "TASK 1B REVIEW" entry, before checking
+anything. Applies to §15.1 (backend unit) and §15.8 (outbound pacing
+suite, to confirm no conflation crept in during the fix).
+
+[2026-07-04T18:31:00] TASK 1B RE-VERIFY — COMPLETE
+
+1. Read backend/app/integrations/pubmed.py `_get()` directly
+   (lines 218-302). Confirmed `response.raise_for_status()` no longer
+   exists anywhere in the method. Every branch (>=500, >=400 after the
+   429/5xx checks) raises a hand-built `PubMedUnavailableError(f"PubMed
+   request failed with status {response.status_code}.")` containing only
+   the integer status code. The `logger.warning(...)` calls on those
+   paths pass `endpoint` (a literal like "esearch.fcgi", not the full
+   URL) and `response.status_code` as format args — never `all_params`,
+   `response.url`, or the response body. The one remaining path that
+   logs an actual exception (`logger.warning("PubMed request to %s
+   failed: %s", endpoint, exc)`, line 239) only fires on
+   `httpx.HTTPError` from `client.get()` itself (e.g. connect/timeout
+   errors), whose `str()` I confirmed empirically does not embed
+   URL/query params the way `HTTPStatusError.__str__` does (that class
+   explicitly formats `for url '{0.url}'` into its message; plain
+   connection-level exceptions don't). No path can construct an
+   exception message containing the request URL or query string.
+
+2. Ran the two new tests:
+   `test_403_response_does_not_leak_api_key_or_email_in_exception` and
+   `test_400_response_raises_pubmed_unavailable` — both PASS against the
+   current code.
+   Non-vacuousness check: copied pubmed.py aside, reverted `_get()`'s
+   >=400 branch to the original `response.raise_for_status()` (removing
+   the sanitized-raise block entirely), then reran just those two tests:
+   both FAILED, with the old code's actual uncaught
+   `httpx.HTTPStatusError` propagating past `pytest.raises
+   (PubMedUnavailableError)`:
+   `httpx.HTTPStatusError: Client error '403 Forbidden' for url
+   'https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi?tool=litlist&db=pubmed&term=q&retmax=20&retstart=0&sort=relevance&retmode=json'`
+   `httpx.HTTPStatusError: Client error '400 Bad Request' for url
+   'https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi?...'`
+   This confirms the tests are not vacuous — they genuinely fail against
+   the pre-fix code, and the failure itself demonstrates the exact
+   leak mechanism (URL embedded in the exception's own message).
+   Restored pubmed.py from the pre-edit copy immediately after
+   (`diff` against the backup confirmed byte-identical restoration)
+   before doing anything else.
+
+3. Ran the full backend suite (`pytest -v`, no -x): 121/121 passed, no
+   regressions in three consecutive runs. Note: senior-backend-
+   developer's log claims 120 passed; the working tree now shows 121 —
+   one additional test exists versus their claimed count (the
+   discrepancy is not attributable to anything in the 1B fix itself;
+   most likely another agent's concurrent Wave 2 test addition landed
+   in the shared tree since their log entry). Flagging this as a minor
+   bookkeeping mismatch, not a regression — I did not identify any
+   failing or unexpectedly-skipped test, and the count is stable across
+   repeated runs.
+
+4. `ruff check .` (from backend/) => "All checks passed!". `mypy app/`
+   => "Success: no issues found in 21 source files". Both clean.
+
+5. Confirmed the declined defusedxml suggestion is genuinely a no-op:
+   grepped pyproject.toml, pubmed.py, and test_pubmed_client.py for
+   "defusedxml" — zero occurrences. No new dependency was added, stdlib
+   `xml.etree.ElementTree` import is unchanged at line 32. Nothing about
+   the declined suggestion silently crept back in or was required by
+   any test.
+
+Coverage note (not a blocker, but worth recording): the new tests cover
+403 and 400 specifically; no parametrized sweep across other non-429/5xx
+4xx codes (401, 404, 422) exists, though the code path is a single
+uniform `>= 400` branch so additional codes would exercise identical
+logic — a reasonable but not exhaustive choice.
+
+VERDICT: Task 1B credential-leak fix VERIFIED. The `_get()` code path
+can no longer construct an exception message containing the request URL
+or query string; both new regression tests are genuine (fail against
+the pre-fix code, pass against the fix) and green on the current tree;
+full backend suite passes (121/121, no regressions); ruff and mypy are
+clean; the declined defusedxml suggestion is confirmed to be a true
+no-op with nothing silently required.
+
+[2026-07-04T16:10:00] TASK 1C RE-VERIFY — START
+Re-verifying senior-backend-developer's PIVOT fix (log entry
+"[2026-07-04T03:10:00] TASK 1C — PIVOT (post-review fix)") for the
+credential-leak bug adversarial-generalist found in
+backend/app/auth/oauth.py's complete_handshake missing-userID error
+path (logs/adversarial-generalist.build.log, "TASK 1C REVIEW"). Scope:
+§15.1 (backend unit) and §15.7 (OAuth) — confirming the fix, its test's
+validity, and the full backend suite/lint/type-check are clean.
+
+[2026-07-04T16:22:00] TASK 1C RE-VERIFY — COMPLETE
+1. Read backend/app/auth/oauth.py directly (not the log's paraphrase).
+   complete_handshake's KeyError handler (lines 163-179) now reads:
+     logger.exception(
+         "Zotero access-token response missing userID; keys present: %r",
+         sorted(tokens.keys()),
+     )
+   No remaining path in this module logs the raw `tokens` dict, the raw
+   `fetch_response` dict from start_handshake's request-token step, or
+   any value drawn from either — both exception handlers in this file
+   (`request-token step failed` at line 120, `access-token exchange
+   failed` at line 160) log only a fixed message with no interpolated
+   response data, and the return path (ZoteroCredentials) never touches
+   logging. Confirmed clean.
+
+2. Ran tests/test_oauth.py::test_complete_handshake_missing_userid_never_logs_raw_credentials
+   in isolation: PASSED.
+   Confirmed non-vacuous: temporarily reverted the fix in-place (restored
+   the original `logger.exception("Zotero access-token response missing
+   userID: %r", tokens)` line, i.e. the exact pre-fix code from
+   adversarial-generalist's finding) and reran the same test — it FAILED
+   with:
+     assert 'sekret-oaut...er-be-logged' not in "ERROR    ap...: 'userID'\n"
+     AssertionError, with the captured log line shown as:
+     "ERROR    app.auth.oauth:oauth.py:173 Zotero access-token response
+     missing userID: {'oauth_token': 'sekret-oauth-token-value-should-
+     never-be-logged', 'oauth_token_secret': 'sekret-oauth-token-secret-
+     should-never-be-logged'}"
+   This confirms the test actually exercises the leak and would have
+   caught the original bug. Restored the fixed file afterward
+   (byte-identical to the pre-mutation version — `git status --short`
+   shows only the untracked-file marker `?? app/auth/oauth.py` from this
+   being a fresh checkout with no committed history for this path yet,
+   no diff against the fix as delivered).
+
+3. Ran the full backend suite fresh (`pytest -v`, backend/.venv):
+   121 passed, 0 failed, 1 warning (an unrelated pre-existing
+   StarletteDeprecationWarning about httpx/TestClient, not a test
+   failure). This includes all 10 tests in tests/test_oauth.py and all
+   7 in tests/test_zotero.py, plus tests/test_pubmed_client.py's 16
+   tests (Task 1B's file, cited in 1C's log as having "2 failed" at fix
+   time due to a concurrent in-flight 1B fix) — all passing now, so
+   Task 1B's separately-completed fix is confirmed not to have left any
+   residual failures either. No failures attributable to either fix.
+
+4. `ruff check .` => "All checks passed!" `mypy app/` => "Success: no
+   issues found in 21 source files."
+
+Coverage note (not a new finding, restating for completeness): the one
+previously-flagged gap in this task's own test suite — test_zotero.py
+mocking pyzotero at the method level (patch.object) rather than at the
+wire level like test_oauth.py's `responses` stubs — is unchanged by
+this fix and remains a real, if minor, coverage-depth gap per
+adversarial-generalist's independent concurrence. Does not affect this
+fix's correctness.
+
+Verdict: TASK 1C credential-leak fix VERIFIED. The fix is present and
+complete in oauth.py, its regression test is genuine (fails pre-fix,
+passes post-fix) and currently green, the full backend suite is fully
+green at 121/121 with no residual failures from either the 1C or the
+concurrently-fixed 1B credential-leak issue, and ruff/mypy are clean.
+
+[2026-07-04T16:00:00] TASK 1D RE-VERIFY — START
+Re-verifying senior-backend-developer's 3 post-adversarial-review fixes
+to Task 1D (normalize.py ≤/≥ handling, negative-number-after-operator
+fix, AbstractSection dedup in pubmed.py, build_segmented_abstract 3-tuple
+return with new spoken_abstract). Checking §15.1/§15.9 test coverage,
+running full backend suite, directly calling normalize_for_speech(),
+grepping for duplicate AbstractSection definitions, and searching
+project-wide for build_segmented_abstract call sites to assess
+breaking-change blast radius.
+
+[2026-07-04T16:20:00] TASK 1D RE-VERIFY — COMPLETE
+
+1. Full backend suite: `pytest -v` => 123 passed, 0 failed (matches
+   claim exactly). `ruff check .` => "All checks passed!". `mypy app/`
+   => "Success: no issues found in 21 source files". All three clean as
+   claimed.
+
+2. Direct calls (not via test file, literal returned strings):
+   - normalize_for_speech("p ≤ 0.05 was considered significant.") =>
+     'p less than or equal to 0.05 was considered significant.'
+   - normalize_for_speech("p ≥ 0.05 was considered significant.") =>
+     'p greater than or equal to 0.05 was considered significant.'
+   - normalize_for_speech("r = -0.34, p < 0.001.") =>
+     'r equals -0.34, p less than 0.001.'
+   All three match the claimed fixes exactly — ≤/≥ now expand correctly
+   and "equals" is now preserved ahead of a negative number. Confirmed
+   test_normalize.py contains matching regression tests
+   (test names reference the adversarial-review findings directly, with
+   inline comments citing them).
+
+3. `grep -rn "class AbstractSection" --include="*.py" .` => exactly one
+   hit, backend/app/text/tokenize.py:251. Confirmed
+   backend/app/integrations/pubmed.py:40 now does
+   `from app.text.tokenize import AbstractSection` and both of its call
+   sites (lines 454, 471) construct it via the imported class. No
+   duplicate definition remains anywhere in the project.
+
+4. Breaking-change blast radius for build_segmented_abstract's new
+   3-tuple return: grepped project-wide (`--include="*.py" --include=
+   "*.ts" --include="*.tsx"`) for `build_segmented_abstract` — the only
+   call sites anywhere are inside backend/tests/test_tokenize.py itself
+   (5 call sites), and all 5 have been updated to unpack 3 values
+   (`display_abstract, spoken_abstract, response = ...` or the
+   `_display, _spoken, response = ...` discard form). No route, no
+   other module, no frontend code calls this function yet — Task 3A
+   (the intended future consumer, per CONTRACTS.md §1 and the PIVOT
+   entry) has not been built yet, so there is no live external caller
+   that this change silently broke. Confirmed via full suite run above
+   (123/123) that nothing else in the codebase depended on the old
+   2-tuple shape. Verdict: this is a real signature change but it has
+   zero actual blast radius today — every existing call site was
+   updated in the same commit, and no other in-repo consumer exists.
+   Flagging forward (not a defect, an FYI for whoever verifies Task 3A
+   later): when 3A is built, its own tests must exercise the 3-tuple
+   unpack, since this tester run cannot verify code that does not yet
+   exist.
+
+5. Spot-checked build_segmented_abstract's spoken_abstract output
+   directly for a 2-section, multi-sentence example containing a figure
+   reference, a p-value, and "vs.":
+     DISPLAY: 'Background\nFig. 2 shows p < 0.05 vs. control.\n\nMethods\nWe recruited 30 patients.'
+     SPOKEN:  'Background.\nfigure two shows p less than 0.05 versus control.\n\nMethods.\nWe recruited thirty patients.'
+   Confirmed programmatically that display != spoken (not a literal
+   duplicate). Section headers get a trailing "." in spoken form
+   (display does not); numbers/operators/abbreviations are normalized
+   only in the spoken accumulator (spoken_parts uses each segment's
+   spoken_text, not display_text) — read the implementation at
+   backend/app/text/tokenize.py:310-420 line by line to confirm
+   spoken_parts.append(header_spoken)/spoken_parts.append(spoken_text)
+   are genuinely separate accumulators from display_parts, not the same
+   list reused. test_tokenize.py's
+   test_structured_abstract_headers_are_structural_and_sentences_denormalized
+   also asserts "Background." and "Methods." and "forty" (not "40") are
+   present in spoken_abstract, which is a real, non-trivial assertion
+   (not a mock that can't fail).
+
+VERDICT: Task 1D fixes VERIFIED. All 3 claimed fixes are real, correctly
+implemented, covered by real regression tests, and the full suite +
+lint + type-check are genuinely clean as claimed. The build_segmented_
+abstract signature change (item 4) is a legitimate breaking change in
+shape but has no current blast radius since no consumer outside its own
+test file exists yet in the repo — this should be re-checked once Task
+3A actually lands and calls this function, but it is not a blocker now.
+No outstanding findings against Task 1D. Tier 1 Wave 2 gate: this was
+the last outstanding item per the coordinator's framing — Task 1D itself
+now clears its own cited tests and closes both adversarial-review
+findings; I have not independently re-verified the other Wave 2 tasks
+(1B, 1C) in this pass, so I am not asserting the full wave gate here,
+only that Task 1D's own gate is met.
