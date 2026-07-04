@@ -702,3 +702,367 @@ bullet. Findings 3(7a)/3(7b) are tester's own findings, independently
 re-verified here as real and cheap; recommend fixing both now rather
 than deferring to Task 3A, given both files are still uncommitted in
 this same wave and the fixes are each on the order of a few lines.
+
+[2026-07-04T17:05:00] TASK 3C REVIEW — START
+Reviewing backend/app/routes/export.py + backend/tests/test_export.py
+against BuildPlan.md lines 544-552 (Task 3C) and SPEC.md §8.8 (CSV/
+formula-injection neutralization, column set) and §13.4 (missing-DOI
+blank column). Also reading senior-backend-developer.build.log's TASK 3C
+COMPLETE + PIVOT entries and tester.build.log's TASK 3C VERIFY entries
+for the cross-session isolation test's non-vacuousness claim.
+
+[2026-07-04T17:20:00] TASK 3C REVIEW — COMPLETE
+
+Findings (most severe first):
+
+1. SIGNIFICANT — `_neutralize_formula_injection` (backend/app/routes/export.py:57-64)
+   is bypassed by any leading whitespace/control character or invisible
+   Unicode character preceding a formula-trigger character. Verified
+   directly by calling the function in a REPL:
+   `_neutralize_formula_injection("\t=1+1")` -> `"\t=1+1"` (unchanged),
+   `_neutralize_formula_injection(" =1+1")` -> `" =1+1"` (unchanged),
+   `_neutralize_formula_injection("‮=1+1")` (right-to-left override
+   char) -> unchanged. The function only checks `value.startswith(("=",
+   "+", "-", "@"))` on the raw string, with no stripping of leading
+   whitespace/control/zero-width characters first. This is a real,
+   reproducible variant of the exact failure class this review was asked
+   to check for (§8.8's own docstring in export.py argues neutralization
+   should apply "regardless of how unlikely a hostile PubMed record is in
+   practice" — the same logic extends to a title/author string that
+   happens to start with a tab or leading space before a trigger char,
+   which OWASP's CSV-injection guidance specifically calls out as a
+   documented bypass technique against naive startswith-style checks,
+   since some spreadsheet CSV importers strip leading whitespace before
+   evaluating whether a cell is a formula). None of test_export.py's 4
+   parametrized adversarial cases (`=1+1`, `+CMD(...)`, `-2+3+cmd...`,
+   `@SUM(...)`) exercise a leading-whitespace or invisible-character
+   variant, so this gap has zero test coverage. Concrete trigger: a
+   PubMed record with a title field of `"\t=1+1"` (or any leading
+   whitespace/zero-width char + trigger char) flows unmodified through
+   `_paper_row` into the CSV, and would still render/execute as a formula
+   in spreadsheet software that normalizes leading whitespace on import.
+   Fix: strip leading whitespace/control characters (or check `value.lstrip()`'s
+   first character) before the `startswith` check, and consider stripping
+   or flagging leading Unicode format/control characters (Cf category,
+   including RTL overrides) as well.
+
+2. Verified, no issue found — CSV row-structure integrity. Confirmed
+   directly with `csv.writer` on values containing embedded commas,
+   newlines, and quotes: outputs are correctly RFC4180-quoted (e.g.
+   `"Line1\nLine2","Contains, comma"`) and round-trip correctly through
+   `csv.reader`. Python's `csv.writer` (default `excel` dialect) is not a
+   source of row-injection risk here regardless of the field content.
+
+3. Verified, no issue found — Content-Type/Content-Disposition. Response
+   sets `media_type="text/csv"` and a static, non-user-influenced
+   `Content-Disposition: attachment; filename="litlist_export.csv"`.
+   Since the filename is a hardcoded literal (not derived from any
+   PubMed/session data), there is no CRLF-header-injection surface here.
+
+4. Verified, no issue found — cross-session isolation test
+   (test_export_never_leaks_another_sessions_saved_papers). Read the test
+   directly: it does use two independent `TestClient` instances (separate
+   cookie jars) against the same app+DB, confirms `session_a != session_b`,
+   and specifically covers the overlapping-PMID case the task description
+   called out (both sessions hold their own `interested` `QueueDecision`
+   row on PMID 888) — the assertions correctly check that each session's
+   export contains its own exclusive paper + the shared paper but never
+   the other session's exclusive paper. The specialist's log claims the
+   test was proven non-vacuous by temporarily breaking the `session_id`
+   filter and confirming the test failed; I did not independently
+   re-break the code to reproduce this (would require an edit I'm not
+   equipped to make and revert), but the query itself
+   (`QueueDecision.session_id == session_id` in the `select` in
+   `_iter_saved_papers_csv`) is a correct, sufficient filter for the
+   assertions made, and the test's structure would genuinely catch a
+   regression to that filter. No cross-session leak found.
+
+5. Not a 3C bug, correctly out of scope — inbound DoS/rate-limiting.
+   `/export.csv` has no rate limiting yet since Task 3D (which owns
+   `slowapi` inbound limiting per §10.5/BuildPlan) hasn't landed. A
+   client holding a valid auto-issued anonymous session could repeatedly
+   hit this endpoint; given the query is scoped to that one session's own
+   `interested` rows, the realistic amplification is bounded by how large
+   one session's own Saved List can get, not a cross-tenant data
+   exposure. This matches BuildPlan's own explicit sequencing (3D moved
+   to Wave 2 specifically because it needs 3A/3B/3C's routes to exist
+   first) — flagging as a known, already-tracked open gap, not a new
+   finding against 3C.
+
+6. Not a bug — no-session/expired-session handling. `SessionIdentityMiddleware`
+   always auto-issues a fresh anonymous `Session` row for any request
+   with a missing/invalid/tampered cookie (per §9.1's "no login" design)
+   rather than ever returning 401 — this is spec-conformant, not a fail-
+   open bug, since a brand-new anonymous session by construction has an
+   empty Saved List (confirmed by `test_export_is_empty_but_valid_when_saved_list_is_empty`).
+   There is no code path where a missing session falls through to
+   exporting other sessions' or system-wide data.
+
+Net: 1 significant finding (formula-injection neutralization bypassed by
+leading whitespace/control/invisible-Unicode characters before the
+trigger character — verified reproducible, zero test coverage for this
+variant). No blocking findings. Reported to senior-backend-developer via
+the orchestrator for a fix (strip leading whitespace/control chars before
+the startswith check) and an added test case.
+
+[2026-07-04T17:05:00] TASK 3B REVIEW — START
+Reviewing BuildPlan.md Task 3B (Zotero endpoints, lines ~513-517/534-542)
+against SPEC.md §10.4 (zotero rows), §8 (all), §9.6 (Fernet encryption,
+disconnect action), and §10.2's OAuth session-binding addendum. Read
+backend/app/routes/zotero.py, backend/tests/test_zotero_routes.py,
+backend/app/models/crypto.py, backend/app/models/identity.py,
+backend/app/auth/oauth.py, backend/app/integrations/zotero.py,
+backend/app/middleware/session.py (OAuthSessionBinding), senior-backend-
+developer's TASK 3B COMPLETE entry, and tester's TASK 3B VERIFY entry.
+Also re-read the TASK 1C REVIEW entry above (module-level binding/logging
+review) for context on what was already checked at the primitive level.
+Focus: route-layer session-CSRF binding, encryption round-trip, per-route
+authorization scoping, the new DELETE /zotero/connection endpoint, and
+error-message leakage.
+
+[2026-07-04T17:35:00] TASK 3B REVIEW — COMPLETE
+
+Verified independently (not taken on tester's or the specialist's word):
+- Traced the actual CSRF-style attack the task asked about end-to-end:
+  attacker starts /zotero/auth/start themselves (own session, own Zotero
+  account or a stolen request token), then gets a victim to load the
+  resulting callback URL. Because OAuthSessionBinding.resolve() compares
+  the *cookie-derived* session_id (victim's own, since SameSite=None only
+  controls whether the cookie is attached cross-site, not which session it
+  is) against the session_id the request_token was bound to at /start
+  (attacker's), the two never match and complete_handshake raises
+  ZoteroSessionMismatchError -> route returns 403 zotero_session_mismatch
+  without ever touching the DB. Confirmed this is actually exercised at
+  the HTTP route layer (not just the primitive) by
+  test_callback_rejects_session_mismatch: two independent TestClient
+  instances/cookie jars, real 302 from /auth/start on client_a, then
+  client_b (different session) hits /auth/callback with client_a's
+  oauth_token+verifier -> 403 and zero ZoteroConnection rows written.
+  This is exactly the scenario BuildPlan/§10.2 describe and it is closed.
+- Independently re-verified Fernet round-trip by reading
+  test_successful_callback_stores_encrypted_connection_and_rotates_session
+  line-by-line: asserts stored oauth_token/oauth_token_secret are neither
+  equal to nor contain the plaintext substrings, and that decrypt_token()
+  recovers the originals — this is a real assertion on real DB rows, not
+  a mocked check. Traced every read path (list_collections,
+  create_collection, push_items call sites in zotero.py) and confirmed
+  each calls decrypt_token(zotero_connection.oauth_token) exactly once
+  per request, passes the resulting plaintext directly as pyzotero's
+  api_key, and never re-encrypts or persists it anywhere — no double-
+  encryption or ciphertext-passed-to-pyzotero risk found.
+- Authorization scoping: collections/push/disconnect all derive their
+  ZoteroConnection exclusively from get_current_zotero_connection /
+  get_current_session (cookie-bound, set by SessionIdentityMiddleware) —
+  no route accepts a connection/session ID as a body or query parameter,
+  so there is no IDOR vector to act on another session's connection.
+  POST /zotero/push's collection_key is attacker-supplied but only lets a
+  session file items into its *own* connected Zotero account/library —
+  expected behavior, not a cross-session leak.
+- DELETE /zotero/connection (new in this task): scoped only to
+  session.session_id, SELECT-then-conditional-delete, idempotent (tested
+  both from populated and empty state). Does not touch ZoteroExport rows
+  or any pending OAuthSessionBinding entry — checked against §9.6's actual
+  wording ("deletes the local ZoteroConnection row immediately") and this
+  matches the spec's stated scope exactly; leaving ZoteroExport history
+  behind is intentional, not an oversight (those rows are audit/dedup
+  history, not a live credential). DELETE is a CORS non-"simple" method
+  regardless of body, so it already gets preflight protection once Task
+  3D's CORS allow-list lands — appropriately out of 3B's scope, not a gap
+  in 3B itself.
+- Error-leakage: every _error_response/_client_error_response call site
+  uses pre-written, safe messages (CONTRACTS.md §2 shape); ZoteroClientError
+  messages already come pre-sanitized from app/integrations/zotero.py's
+  _wrap_pyzotero_error (never str(exc) from the raw pyzotero exception);
+  decrypt_token's ValueError is caught and mapped to a generic
+  service_unavailable message, never re-raised or logged with content.
+  No stack traces, no raw pyzotero/Zotero HTTP bodies, no token fragments
+  found anywhere in a response path.
+- Tester's TASK 3B VERIFY entry checked against the real files: its 9
+  numbered claims (full-suite isolation of 3A's pre-existing unrelated
+  failures, ruff/mypy clean, adhoc Fernet DB dump, session-rotation trace,
+  session-mismatch route-level repro, push shape vs. fixture, disconnect
+  idempotency, CONTRACTS/SPEC cross-check, not_found handling) all match
+  what's actually in the code and test file — no inflated or unsupported
+  claim found.
+
+Findings:
+1. MINOR — Test coverage gap, not a behavioral defect: test_zotero_routes.py
+   never exercises oauth.ZoteroOAuthProviderError at the route layer for
+   either /zotero/auth/start or /zotero/auth/callback (only tested at
+   Task 1C's module level), nor the decrypt_token ValueError path on
+   /collections, /collections POST, or /push. Read the actual except
+   blocks in zotero.py — they're straightforward try/except ->
+   _error_response(503, ...) with no branching logic, so risk of an
+   undetected bug here is low, but it is an untested path at this layer
+   and would be cheap to add (patch oauth.start_handshake/
+   complete_handshake to raise, or monkeypatch decrypt_token to raise
+   ValueError, and assert the 503 shape). Not blocking; flagging for
+   whoever picks up Task 3D's or a later hardening pass.
+2. MINOR — Non-atomic two-commit sequence in auth_callback: the new
+   ZoteroConnection is inserted and committed under the *old*
+   (pre-rotation) session_id, then rotate_session() performs a second,
+   separate commit that migrates it onto the new session_id and deletes
+   the old Session row. A process crash between these two commits (a
+   narrow window, not currently reachable via any tested code path) would
+   leave a correctly-encrypted ZoteroConnection persisted under the
+   old, not-yet-rotated session_id — reopening the exact session-fixation
+   window §9.1/rotate_session exists to close, until the next request
+   naturally retries. Purely theoretical (no crash-injection test needed
+   to fix; would require wrapping both operations in one transaction/
+   savepoint) — noting because it's the one place the "commit, then
+   rotate" ordering matters for the property being tested, not because
+   there's evidence it's actually been hit.
+
+No blocking or significant findings. The primary ask — session-binding
+regression at the route layer — was checked adversarially against the
+concrete attack scenario (attacker-initiated handshake + victim tricked
+into completing it) and is genuinely closed, both by code inspection and
+by a real two-cookie-jar HTTP round-trip test that exercises the actual
+route, not just the underlying primitive already covered by Task 1C's
+review. Tester's "gate MET" verdict is accurate and its citations were
+verified: CONTRACTS.md §4 and SPEC.md §10.4's DELETE row do say what
+tester's log claims, and the fixture-shape/idempotency/push-result
+assertions cited actually exist in test_zotero_routes.py as described.
+
+[2026-07-04T21:15:00] TASK 3A REVIEW — START
+Reviewing Task 3A (core loop endpoints: search.py, queue.py, decisions.py,
+saved.py, _shared.py, errors.py, clients.py, entities.py additions) against
+BuildPlan.md lines 513-533 and SPEC.md §10.4/§7.9/§13.6, focused specifically
+on security/abuse-surface angles tester's 4 functional-verification rounds
+(TASK 3A VERIFY / RE-VERIFY / FINAL VERIFY in logs/tester.build.log) would
+not have prioritized: session-scoping completeness across ALL routes (not
+just the 3 tester already fixed), §13.6's broad-except risk of masking real
+bugs as service_unavailable, TOCTOU on PATCH/DELETE, retracted-field
+disclosure, pagination abuse, and secret leakage. Read
+senior-backend-developer's TASK 3A START/PIVOT/COMPLETE entries and all of
+tester's TASK 3A VERIFY/RE-VERIFY/FINAL VERIFY entries first, then read
+every route file plus errors.py/clients.py/entities.py additions and
+app/main.py directly.
+
+[2026-07-04T21:45:00] TASK 3A REVIEW — COMPLETE
+
+1. SIGNIFICANT — search.py has zero cross-session isolation tests, unlike
+   the other three route files. tester's TASK 3A VERIFY/RE-VERIFY rounds
+   found and drove fixes for missing cross-session tests in
+   test_queue_routes.py, test_saved_routes.py, and
+   test_decisions_routes.py, but never flagged that test_search_routes.py
+   (grep of its 9 test functions: happy_path, zero_results,
+   replaces_prior_queue_decisions, pubmed_unavailable, two validation
+   tests, citations_sort, settings_defaults, settings_reflects_last_search)
+   has NONE. POST /search and GET /search/settings both read/write
+   SearchSession and QueueDecision rows filtered by
+   `SearchSession.session_id == session.session_id` /
+   `QueueDecision.session_id == session.session_id` (backend/app/routes/
+   search.py lines 160-179, 237-239) — by direct code inspection this
+   filtering IS correctly present at the SQL WHERE-clause level (not a
+   Python post-filter over an over-fetched query), so the current
+   behavior looks correct. But it is completely unproven: no test exists
+   that would catch a future regression here (e.g. a refactor of the
+   select-or-create block that drops the WHERE clause, or one that
+   fetches all SearchSession rows and filters in Python instead) — the
+   exact same class of gap tester already found and required fixing for
+   queue/saved/decisions in this same task was not carried over to the
+   fourth file that owns the same kind of session-scoped mutation
+   (wiping/rebuilding another session's QueueDecision rows, or reading
+   another session's SearchSession settings, would be a real cross-user
+   leak/corruption if this filter were ever silently dropped).
+
+2. SIGNIFICANT (scope note: root cause lives in Task 1B's
+   app/integrations/pubmed.py, but the risk is realized through 3A's own
+   queue.py) — GET /papers/{pmid}/abstract (backend/app/routes/queue.py
+   lines 220-230) maps a genuine internal parsing failure to the exact
+   same 404 `not_found` response as a truly nonexistent PMID.
+   `PubMedClient.efetch()` -> `_parse_efetch_xml()` (app/integrations/
+   pubmed.py lines 426-437) wraps `_parse_one_article()` in a broad
+   `except Exception` per article, logs at WARNING, and skips it — this
+   is individually reasonable (one malformed record shouldn't kill a
+   batch, per §7.9), but queue.py's own consumption of the result
+   (`if not articles: raise not_found(...)`, line 228-229) cannot
+   distinguish "PubMed genuinely has no such PMID" from "every article in
+   the batch threw during parsing" (e.g. a real KeyError from an
+   unexpected NCBI XML schema change). Concretely: if NCBI changed EFetch's
+   XML shape tomorrow such that `_parse_one_article` throws for every
+   request, every `/papers/{pmid}/abstract` call would return an
+   unremarkable 404 to users, and the server would only log WARNINGs
+   (never ERROR/exception-level), meaning nothing in this app's own
+   response codes or default log severity would distinguish this from
+   normal 404 traffic — hiding a real, systemic backend bug from any
+   404-tolerant monitoring/alerting. This is exactly the failure mode
+   item 2 of the review brief asked to check for (a genuine internal bug
+   misreported as something innocuous instead of surfacing as an error).
+
+3. MINOR — POST /search's select-or-create on `SearchSession`
+   (`session_id` is a `unique=True` column, entities.py line ~78) has a
+   TOCTOU gap under concurrent double-submit from the same session (e.g.
+   a slow-network client retry firing two POST /search calls back to
+   back): both requests can pass the `.first() is None` check before
+   either commits, then the second `db.commit()` hits the unique
+   constraint and raises an unhandled `IntegrityError`. Since
+   app/main.py explicitly documents that Task 3D's catch-all
+   `internal_error` exception handler has not landed yet ("§13.6...
+   Task 3D... once all of Wave 1's routes exist to test it against"),
+   this currently surfaces as FastAPI/Starlette's raw default 500, not
+   the CONTRACTS.md-shaped envelope — though not a stack-trace leak by
+   default. Not blocking since it's explicitly and correctly deferred to
+   3D's own gate, but worth Task 3D's rollout re-checking this specific
+   route once the global handler lands.
+
+4. MINOR/informational — decisions.py PATCH and saved.py DELETE have no
+   optimistic locking; concurrent double-submits on the same PMID from
+   the same session are a benign last-write-wins race (no crash, no
+   cross-session leakage, no TOCTOU that skips the ownership check
+   itself — the `session_id ==` filter is always applied fresh on each
+   request). Checked per item 3 of the brief; nothing exploitable found.
+
+5. Nothing else survived scrutiny on the remaining checks:
+   - Session scoping is done via SQL WHERE clauses consistently in all
+     four route files (decisions.py lines 63-68, saved.py lines 50-58 and
+     88-94, queue.py lines 134-136/141-145, search.py as above) — no
+     Python-side post-filter-over-broad-fetch pattern found anywhere in
+     this task's files.
+   - §13.6: confirmed (independently, not trusting tester's prior read)
+     that every route's PubMed-facing try/except catches the specific
+     `PubMedUnavailableError` class only; the sole broad
+     `except Exception` instances in search.py/decisions.py are narrowly
+     scoped to `await request.json()` parsing and immediately re-raised
+     as `validation_error` — they cannot swallow an unrelated bug
+     elsewhere in the route.
+   - `retracted` field: purely additive on QueueItem/SavedItem, defaults
+     to `False` on the Paper model, and CONTRACTS.md §5 states the
+     "false may mean not-yet-known" caveat with an explicit, unambiguous
+     directive to the frontend ("render nothing distinctive until the
+     flag is confirmed true, never render a false 'not retracted'
+     assurance") — this is stronger guidance than a bare caveat and
+     substantially reduces (though of course cannot fully guarantee,
+     since that's a Task 4A implementation choice) the foreseeable
+     trust-problem risk raised in item 4 of the brief.
+   - Pagination (§7.9): `retstart`/`retmax` are never taken from request
+     input anywhere in these 4 files — `retstart=0` is hardcoded in
+     POST /search, and GET /queue's follow-up uses
+     `search_session.next_retstart`, a server-maintained integer
+     incremented by exactly 20 per successful follow-up fetch, with no
+     client-facing parameter to manipulate it. No user-controlled path
+     to excessive PubMed calls, an infinite loop, or an over-broad DB
+     scan was found.
+   - Credential/secret leakage: none found. app/clients.py only
+     constructs and lru_caches PubMedClient()/ICiteClient() with no
+     credential handling of its own; app/errors.py never interpolates
+     `str(exc)` into any client-facing message (confirmed by reading the
+     whole file, 66 lines); every logger.warning() call in the 4 route
+     files logs only the safe PubMedUnavailableError message or a pmid,
+     never a session cookie/token or raw internal exception object.
+
+Verdict: 2 significant findings (missing cross-session tests for
+search.py; EFetch parsing failures indistinguishable from genuine 404s,
+masking a real-bug class from monitoring), 2 minor findings (SearchSession
+TOCTOU explicitly deferred to Task 3D; benign last-write-wins race on
+PATCH/DELETE). No blocking findings — nothing found that represents an
+active, currently-exploitable session-isolation break, credential leak, or
+stack-trace disclosure. Recommend closing significant finding #1 with a
+test mirroring the pattern already established for queue/saved/decisions
+before treating Task 3A's session-isolation coverage as complete across
+all four files, and recommend finding #2 be routed to whoever owns
+app/integrations/pubmed.py (Task 1B) or to Task 3D as a candidate for
+distinguishing "empty parse result" from "genuine not-found" (e.g. via a
+distinct internal signal/log level) so it doesn't silently hide behind a
+404.

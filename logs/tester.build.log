@@ -1476,3 +1476,960 @@ now clears its own cited tests and closes both adversarial-review
 findings; I have not independently re-verified the other Wave 2 tasks
 (1B, 1C) in this pass, so I am not asserting the full wave gate here,
 only that Task 1D's own gate is met.
+
+[2026-07-04T16:00:00] TASK 3C VERIFY — START
+Verifying senior-backend-developer's Task 3C (CSV export endpoint) against
+BuildPlan.md lines 544-552, SPEC.md §8.8 (column spec, CSV/formula-injection
+neutralization), §13.4 (missing-DOI handling), test requirement §15.1. Read
+the 3C COMPLETE log entry first. At time of check, app/routes/ contains only
+export.py (3C) and zotero.py (3B) — 3A's files (search/queue/decisions/saved
+routes) do not exist yet in this snapshot, so the full pytest run below
+reflects Wave-1 progress from 1A/1B/1C/1D/3B/3C only, not 3A. Will
+independently run pytest/ruff/mypy, read _neutralize_formula_injection and
+the StreamingResponse implementation directly, and check session-scoping
+and column-set claims against SPEC text.
+
+[2026-07-04T16:10:00] TASK 3C VERIFY — PIVOT
+Read tests/test_export.py's session-scoping test
+(test_export_only_includes_interested_decisions_for_current_session) closely:
+it only exercises decision-STATE filtering (interested vs. pending) within
+a SINGLE session_id — there is no test anywhere in test_export.py that seeds
+two distinct sessions and asserts one session's export never includes the
+other session's interested papers. The 3C COMPLETE log's own wording
+("a pending decision for the same session is excluded") is accurate and
+matches what the test actually does — but the task brief's cited concern
+("only the requesting session's own saved papers, not other sessions'")
+is NOT covered by any current test. This is a genuine coverage gap, not
+a misreading: grepped test_export.py for any second `session_id=` literal
+distinct from `_establish_session`'s returned id — none exists.
+
+[2026-07-04T16:25:00] TASK 3C VERIFY — COMPLETE
+
+1. Test run: `.venv/bin/python -m pytest -v` from backend/ (system Python
+   lacked sqlalchemy; a working venv exists at backend/.venv, used that
+   instead) => 142 passed, 0 failed, 1 warning (pre-existing benign
+   httpx/starlette.testclient deprecation notice, unrelated to 3C). This
+   is not the "131" the 3C log cites, but that's explained by timing, not
+   a discrepancy in 3C's own claim: 3B's zotero-route test files
+   (test_zotero_routes.py, plus test_oauth.py/test_oauth_session_binding.py/
+   test_zotero.py) are present and passing in this later snapshot, adding
+   more tests than existed when 3C wrote its log. All 8 of test_export.py's
+   own tests are present and green: test_export_returns_correct_column_set,
+   test_missing_doi_exports_blank_doi_and_url_without_error, 4x
+   test_formula_injection_prefixes_are_neutralized[...] parametrized cases,
+   test_export_only_includes_interested_decisions_for_current_session,
+   test_export_is_empty_but_valid_when_saved_list_is_empty. No regressions
+   found anywhere in the 142-test full run.
+
+   `.venv/bin/ruff check app/routes/export.py app/main.py tests/test_export.py`
+   => "All checks passed!" — confirmed clean exactly as claimed.
+
+   `.venv/bin/mypy app/routes/export.py app/main.py` => 1 error reported,
+   but it is `app/routes/zotero.py:342: error: Dict entry 2 has incompatible
+   type "str": "str | None"; expected "str": "Collection[str]"  [dict-item]`
+   — mypy follows main.py's import of zotero_router transitively into
+   zotero.py, which is 3B's file, not 3C's. Re-ran
+   `mypy --follow-imports=silent app/main.py app/routes/export.py` =>
+   "Success: no issues found in 2 source files", confirming export.py and
+   main.py themselves are genuinely mypy-clean; the one error is
+   attributable entirely to zotero.py. Note: this is a mypy finding in
+   zotero.py the 3C log did not itself surface (3C's log only flagged
+   pre-existing *ruff* findings in zotero.py, not this mypy one) — still
+   correctly out of scope for 3C, but the log's characterization of
+   zotero.py's issues was incomplete (ruff-only) even though not
+   attributed to 3C either way.
+
+   `.venv/bin/ruff check .` (full repo) => 24 errors, all located in
+   app/routes/zotero.py and tests/test_zotero_routes.py (confirmed by
+   reading the full output) — none in export.py/main.py/test_export.py.
+   Matches 3C's claim that this pre-existing lint debt belongs to 3B, not
+   3C.
+
+2. `_neutralize_formula_injection` (app/routes/export.py:57-64): checks
+   `value.startswith(_FORMULA_TRIGGER_CHARS)` where
+   `_FORMULA_TRIGGER_CHARS = ("=", "+", "-", "@")` — all four required
+   leading characters covered, and it is a leading-single-quote prefix
+   (`f"'{value}"`), not stripping. Applied via `_paper_row` (lines 81-98)
+   to all seven raw values (title, formatted authors, journal, pub_date,
+   doi, pmid, url) unconditionally via a single list comprehension — no
+   column is skipped. Confirmed genuinely uniform, not partial.
+
+   The 4 parametrized adversarial tests (`=1+1`, `+CMD(...)!A1`,
+   `-2+3+cmd|'...'!A1`, `@SUM(1,2)`) seed the adversarial string into the
+   title AND separately adversarial values into authors/journal/pub_date
+   (`{"first_name": "=2+2", "last_name": "@evil"}`, journal="+bad",
+   pub_date="-1999") in the same test, then genuinely round-trip the
+   response body through `csv.reader(io.StringIO(body))` (real CSV
+   parsing, not a raw-string `.startswith()` check on the HTTP body) and
+   assert `cell[:1] not in ("=", "+", "-", "@")` for every cell in the
+   data row, plus a positive assertion that the title cell equals
+   `f"'{adversarial_title}"` specifically (proving the leading-quote
+   mechanism, not merely "no longer starts with the bad char" which could
+   also be satisfied by silent stripping). This is genuine, not
+   decorative, coverage.
+
+3. Streaming implementation (`_iter_saved_papers_csv`, lines 112-131, and
+   `_EchoBuffer`, lines 101-109): this is a real generator function using
+   `yield` per row, backed by `csv.writer(_EchoBuffer())` where
+   `_EchoBuffer.write()` returns the formatted line string instead of
+   buffering it anywhere — each `writer.writerow(...)` call's return value
+   (the freshly-formatted line) is yielded directly into the
+   `StreamingResponse`. The DB query itself is also lazily iterated
+   (`for paper, _decision in rows:` over a SQLModel `.exec()` result) rather
+   than materialized into a list first. No full-CSV string is ever built
+   in memory before wrapping — this is genuine row-at-a-time streaming, not
+   the common false-streaming anti-pattern of building the whole body and
+   handing it to StreamingResponse as one chunk.
+
+4. Missing-DOI (§13.4): `_paper_row` computes `doi = paper.doi or ""` and
+   `url = f"https://doi.org/{doi}" if doi else ""` — both blank when DOI is
+   absent, no exception path. `test_missing_doi_exports_blank_doi_and_url_
+   without_error` seeds a paper with doi=None, asserts response status 200,
+   asserts exactly 2 parsed rows (header + 1 data row, i.e. did not crash
+   mid-stream), and asserts both the DOI and URL columns are the empty
+   string. Genuinely exercises the real code path, not a mock.
+
+5. Session-scoping: `_iter_saved_papers_csv` filters on
+   `QueueDecision.session_id == session_id` AND
+   `QueueDecision.decision == DecisionState.interested` — the session-id
+   filter is present in the actual code. HOWEVER, as flagged in the PIVOT
+   entry above, the ONLY test that exercises exclusion
+   (test_export_only_includes_interested_decisions_for_current_session)
+   varies only the decision state (interested vs. pending) within a single
+   session — it never seeds a second, different session_id and confirms
+   that session's interested papers are excluded from the first session's
+   export. This is a real, currently-uncovered gap: the session_id filter
+   in the query is untested in isolation from the decision-state filter.
+   Given session-scoping is the entire security boundary between two
+   different LitList users' Saved Lists, I consider this coverage gap
+   non-trivial, not a nitpick, even though the code itself (read directly)
+   does appear correct.
+
+6. Column set cross-checked against SPEC.md §8.8 literal text (line 1487:
+   "Column set: Title, Authors, Journal, Date, DOI, PMID, URL") against
+   `_CSV_COLUMNS = ["Title", "Authors", "Journal", "Date", "DOI", "PMID",
+   "URL"]` in export.py and the header row asserted in every relevant test
+   — exact match, same order, no extra/missing/renamed columns.
+
+VERDICT: Task 3C's own cited tests (§15.1: adversarial field-value
+neutralization, correct column set, missing-DOI row) are genuinely
+satisfied — 8/8 passing, real CSV-round-trip assertions (not raw-string
+checks), genuine row-at-a-time streaming (not false-streaming), and
+missing-DOI genuinely exercised end-to-end without error. ruff/mypy are
+clean on export.py/main.py specifically; the one project-wide mypy finding
+and the 24 project-wide ruff findings both belong exclusively to 3B's
+zotero.py/test_zotero_routes.py, correctly not 3C's responsibility. Full
+142-test backend suite passes with no regressions attributable to 3C.
+
+Task 3C checkpoint: MET for its own narrowly-cited §15.1 tests, with one
+coverage gap I am flagging explicitly rather than letting pass quietly:
+there is no test proving cross-session exclusion (only same-session
+decision-state exclusion is tested) even though the underlying query code
+does filter by session_id. I recommend this gap be closed — one small
+additional test seeding two sessions — before this endpoint is treated as
+fully verified for the upcoming adversarial injection-check review, since
+"does the export leak another session's saved papers" is exactly the kind
+of question that review will likely probe.
+
+[2026-07-04T16:10:00] TASK 3B VERIFY — START
+Verifying senior-backend-developer's Task 3B (Zotero endpoints) against
+BuildPlan.md lines 513-517/534-542, SPEC.md §10.4/§8/§9.6, and the
+task's own new spec/contract additions (SPEC.md §10.4's DELETE
+/zotero/connection row, CONTRACTS.md §4). Read the COMPLETE entry in
+logs/senior-backend-developer.build.log ("TASK 3B — COMPLETE") first.
+Noting per the coordinator's instruction: Tasks 3A/3B/3C share
+backend/ concurrently; 3A's route files (search.py/queue.py/
+decisions.py/saved.py) are still visibly in-progress, so any failures
+in those files/tests are out of scope for this verification.
+
+[2026-07-04T16:35:00] TASK 3B VERIFY — COMPLETE
+
+1. Full suite: `pytest -v` from backend/ => 168 collected, 164 passed,
+   4 FAILED. All 4 failures are in 3A's own files, not 3B's:
+   - tests/test_decisions_routes.py::test_patch_decision_updates_state
+     — `assert 404 == 200`
+   - tests/test_queue_routes.py::test_queue_returns_service_unavailable_when_nothing_cached_and_pubmed_down
+     — `assert 200 == 503` (`AssertionError: assert 200 == 503\n +  where 200 = <Response [200 OK]>.status_code`)
+   - tests/test_saved_routes.py::test_get_saved_returns_only_interested_papers
+     — `AssertionError: assert [] == ['1']` (Right contains one more item: '1')
+   - tests/test_saved_routes.py::test_delete_saved_sets_not_interested_not_hard_delete
+     — `assert 404 == 200`
+   These are 3A's Task (Core loop endpoints), currently still in
+   progress per the coordinator's note — NOT attributed to 3B. Isolating
+   just `pytest -v tests/test_zotero_routes.py`: 11/11 PASSED, matching
+   the 11 claimed. (The suite total differs from 3B's self-reported
+   "142 passed" because 3A/3C added more tests to the shared backend/
+   after 3B's own completion timestamp — expected given concurrent
+   work, not a discrepancy in 3B's own claim.)
+
+2. `ruff check app/routes/zotero.py app/main.py tests/test_zotero_routes.py`
+   => "All checks passed!" — confirmed. Full-repo `ruff check .` now
+   shows 26 errors (up from the 19 3B cited, again because 3A kept
+   adding files after 3B's completion) — grepped every error's file
+   path: all 26 are in app/routes/{decisions,queue,saved,search}.py,
+   tests/_fakes.py, tests/test_queue_routes.py, tests/test_search_routes.py.
+   None in any file 3B touched (zotero.py, main.py, test_zotero_routes.py).
+   `mypy app/` => "Success: no issues found in 30 source files" — clean,
+   confirmed.
+
+3. Fernet encryption independently verified — NOT just trusting the
+   test's own assertion or the module's docstring. Wrote a throwaway
+   pytest file (tests/test_zz_tester_adhoc_verify.py, deleted
+   immediately after the one run) reusing the exact same db_engine/app
+   wiring as test_zotero_routes.py, ran the real OAuth start+callback
+   flow through the actual route, and printed the raw DB column values:
+   oauth_token = 'gAAAAABqSRyv3ckJF-sAQ-ihyOkImQGQxffjoXzGVWQzxVzHYeRtKO9elbSv2PpOYdF7Wmt3lY9JYQGA0ihV8AkpDnXLU28B3w=='
+   oauth_token_secret = 'gAAAAABqSRyv2F2WFlinRnabLhTdQYnJSLcjLeOH4k4-0Q0MQdjXIbyserZ_lcYZtp1qugI2Of1S9lW-piTU5uqYqoCYhAmB_A=='
+   Both are genuine Fernet tokens (gAAAAA... prefix, base64 ciphertext),
+   confirmed to contain neither "access-token-1" nor "access-secret-1"
+   as substrings. Confirms §9.6 is actually implemented, not just
+   commented as implemented.
+
+4. Session rotation on Zotero-connect (§9.1) traced through the actual
+   route code (app/routes/zotero.py::auth_callback): on successful
+   `oauth.complete_handshake`, it re-fetches the current Session row,
+   calls `rotate_session(db, current_session_row)` (app/models/identity.py),
+   which migrates every session-scoped row — including the just-inserted
+   ZoteroConnection — onto a newly generated session_id and deletes the
+   old Session row, then the route pushes the new cookie via
+   `set_session_cookie` onto the 302 redirect. This is a genuine call,
+   not a stub — confirmed by test_successful_callback_stores_encrypted_connection_and_rotates_session's
+   assertions that db.get(SessionRow, pre_callback_session_id) is None
+   and the ZoteroConnection's session_id differs from it, matches my
+   own adhoc reproduction above.
+
+5. Session-mismatched callback rejection tested genuinely end-to-end at
+   the route level (test_callback_rejects_session_mismatch): two
+   independent TestClient instances sharing one app but distinct cookie
+   jars (client_a starts the handshake and gets a session cookie;
+   client_b independently gets its own session cookie via a prior
+   unrelated request), then client_b hits the real
+   GET /zotero/auth/callback with client_a's issued oauth_token/verifier
+   — asserts 403 zotero_session_mismatch and that no ZoteroConnection
+   row was ever written. This is a real HTTP round-trip through the
+   route (not a direct unit test of OAuthSessionBinding, which Task 1C
+   already covered) — satisfies the "route-level, not primitive-level"
+   requirement.
+
+6. POST /zotero/push response shape verified byte-for-byte against
+   CONTRACTS.md §3 using the real partial-failure fixture
+   (fixtures/zotero/item_creation_response.json: index 0 succeeds/index 1
+   fails, confirmed by reading the fixture directly — "failed": {"1":
+   {"code": 503, ...}}). test_push_returns_per_pmid_results_never_all_or_nothing
+   confirms both a "success" and a "failure" result appear in the same
+   200 response, with exactly one ZoteroExport row written (never
+   all-or-nothing). Response envelope {"collection_key", "results": [...]}
+   matches CONTRACTS.md §3's shape field-for-field.
+
+7. DELETE /zotero/connection idempotency confirmed both by
+   test_disconnect_removes_connection_and_is_idempotent (204 -> row gone
+   -> second DELETE still 204) and test_disconnect_on_a_session_with_no_connection_is_a_no_op_204
+   (204 from a totally empty state, no 500). Read the route code itself:
+   it does a SELECT-then-conditional-delete, never assumes a row exists,
+   so this isn't accidental.
+
+8. CONTRACTS.md §4 and SPEC.md §10.4's new row read directly (not just
+   presence-checked): both agree on 204/empty-body/idempotent-on-missing-row
+   for DELETE /zotero/connection; CONTRACTS.md §4 also correctly notes
+   frontend's apiFetch already special-cases 204 (Task 2A), so this is
+   a confirming addition, not a new frontend requirement. Consistent
+   with the actual route implementation (`Response(status_code=204)`,
+   `@router.delete("/connection", status_code=204, response_model=None)`).
+
+9. not_found handling for a PMID with no cached Paper row verified via
+   test_push_reports_not_found_for_a_pmid_missing_from_the_paper_cache:
+   returns a per-item {"status": "failure", "error": {"code": "not_found",
+   ...}} without ever calling zotero_client.push_items for it (the route
+   filters not-found PMIDs out of the `pushable` list before calling
+   push_items), and confirms no ZoteroExport row is written — fails
+   gracefully per-item, does not crash or fail the whole batch.
+
+Coverage note (not a blocking gap, but worth flagging): all Zotero
+integration tests patch `zotero_client.Zotero`'s methods directly
+(patch.object(zotero_client.Zotero, "create_items", ...)) rather than
+exercising 1C's `zotero_client` wrapper's own outbound-pacing/backoff
+behavior from this route layer — that's appropriately Task 1C's own
+test responsibility (§10.5), not a 3B gap, but noting for completeness
+since §15.8 draws a hard line between outbound pacing and inbound
+rate-limiting suites and this route layer correctly stays out of both.
+
+Verdict: Task 3B checkpoint MET. All 11 of 3B's own tests
+(test_zotero_routes.py) pass; ruff/mypy clean on every file 3B owns;
+every one of the 8 checkpoint items above independently reproduced or
+traced through the actual code, not taken on the specialist's word.
+The only failures in the current full-suite run belong to the
+concurrently-in-progress Task 3A and do not implicate 3B's files —
+consistent with BuildPlan's partial-failure rule (Task 3B's own gate is
+independently met; Tier 3 Wave 1's overall gate is NOT yet met because
+3A still has 4 failing tests as of this run).
+
+[2026-07-04T18:10:00] TASK 3C RE-VERIFY — START
+Re-verifying senior-backend-developer's fix (log entry "TASK 3C — PIVOT
+(post-adversarial-review fix)", 2026-07-04T16:05:00) for the
+leading-whitespace/invisible-Unicode-character bypass of
+`_neutralize_formula_injection` found by adversarial-generalist ("TASK
+3C REVIEW", finding #1). Checking backend/app/routes/export.py's
+`_first_significant_char`/`_neutralize_formula_injection` against §8.8,
+running the 6 new tests in backend/tests/test_export.py, independently
+proving non-vacuousness by reverting to the old bare
+`value.startswith(...)` check, and adding my own adversarial inputs not
+in the suite.
+
+[2026-07-04T18:35:00] TASK 3C RE-VERIFY — COMPLETE
+
+1. Code read directly (backend/app/routes/export.py:70-105).
+   `_first_significant_char` walks the string skipping `char.isspace()`
+   and `unicodedata.category(char) == "Cf"` characters, returning the
+   first character that is neither — genuinely covers both leading
+   whitespace AND the full Cf ("format") category, not just whitespace
+   or just the one RTL-override character called out in the original
+   finding. `_neutralize_formula_injection` calls
+   `_first_significant_char(value)` for the trigger check but prefixes
+   `f"'{value}"` — the ORIGINAL unmodified `value`, never a
+   stripped/mutated copy — confirmed by direct reading of lines 103-105,
+   no `.lstrip()` or similar mutation anywhere in the prefixed path.
+   Logic is sound.
+
+2. Ran `pytest -v tests/test_export.py`: 15/15 passed, including all 6
+   new tests (3 end-to-end route tests + 3 direct unit tests for
+   leading_tab/leading_space/leading_rtl_override).
+   Non-vacuousness independently reproduced: temporarily edited
+   `_neutralize_formula_injection` to use the old bare
+   `value.startswith(_FORMULA_TRIGGER_CHARS)` check (removing the
+   `_first_significant_char` call), reran
+   `pytest -v tests/test_export.py -k leading`. Result: all 6 new tests
+   failed, e.g.:
+     test_formula_injection_neutralized_past_leading_whitespace_or_invisible_chars[leading_tab]
+       AssertionError: assert '\t=1+1' == "'\t=1+1"
+     test_formula_injection_neutralized_past_leading_whitespace_or_invisible_chars[leading_space]
+       AssertionError: assert ' =1+1' == "' =1+1"
+     test_formula_injection_neutralized_past_leading_whitespace_or_invisible_chars[leading_rtl_override]
+       AssertionError: assert '‮=1+1' == "'‮=1+1"
+     test_neutralize_formula_injection_unit_leading_whitespace_or_invisible_chars[leading_tab]
+       AssertionError: assert '\t=1+1' == "'\t=1+1"
+     test_neutralize_formula_injection_unit_leading_whitespace_or_invisible_chars[leading_space]
+       AssertionError: assert ' =1+1' == "' =1+1"
+     test_neutralize_formula_injection_unit_leading_whitespace_or_invisible_chars[leading_rtl_override]
+       AssertionError: assert '‮=1+1' == "'‮=1+1"
+   Restored the file from a pre-edit backup afterward; confirmed
+   `git diff app/routes/export.py` was empty and the full 15/15 passed
+   again. The 6 new tests are proven non-vacuous — they genuinely catch
+   the exact regression they were written for.
+
+3. My own adversarial inputs (direct calls to
+   `_neutralize_formula_injection`, not in the existing suite), all
+   passed against the current (fixed) code:
+   - Multiple leading whitespace chars before a trigger, `"   =1+1"` ->
+     correctly prefixed to `"'   =1+1"`.
+   - A Cf-category character that is NOT RTL override — U+200D ZERO
+     WIDTH JOINER (`unicodedata.category` confirmed `"Cf"`) followed by
+     a trigger, `"‍=1+1"` -> correctly prefixed to
+     `"'‍=1+1"`.
+   - Mixed leading whitespace + multiple Cf characters + trigger,
+     `" \t‍‮=1+1"` -> correctly prefixed.
+   - Negative/over-neutralization check: leading whitespace/tab followed
+     by content that is NOT a formula trigger once stripped —
+     `"  hello"` and `"\thello world"` -> both returned UNCHANGED
+     (no spurious `'` prefix), confirming the fix does not over-flag
+     safe leading-whitespace content as a defect would.
+   - Edge cases: empty string and an all-whitespace string (`"   "`)
+     both returned unchanged, no crash on `_first_significant_char`
+     falling through to `return ""`.
+   All assertions held; no bypass or over-neutralization found.
+
+4. Full backend suite: `pytest -q` (from backend/, venv activated) =>
+   174 passed, 1 warning (an unrelated `StarletteDeprecationWarning`
+   about httpx/starlette.testclient), no failures, no regressions.
+
+5. `ruff check app/routes/export.py tests/test_export.py` => "All
+   checks passed!". `mypy app/routes/export.py` => "Success: no issues
+   found in 1 source file". Both clean.
+
+Coverage note (not a blocker, worth flagging): no test yet exercises a
+formula-trigger character preceded by a very long run of whitespace/Cf
+characters (e.g. hundreds), nor a trigger hidden behind a *mix* of
+other Unicode whitespace variants (e.g. U+00A0 NO-BREAK SPACE — checked
+manually, `" ".isspace()` is True in Python so this is already
+covered by the `isspace()` branch, but the test suite itself doesn't
+pin this specific case). This is a minor gap, not a defect — the
+implementation's approach (walk-until-neither-isspace-nor-Cf) already
+generalizes correctly by construction; the gap is only that this
+generalization isn't independently pinned by name in the test file.
+
+Verdict: TASK 3C injection fix VERIFIED. The bypass adversarial-generalist
+found is genuinely closed, the fix is correctly scoped (whitespace AND
+full Cf category, not just the one demoed character class), the prefix
+is applied to the original unmodified value (no data corruption), the 6
+new tests are proven non-vacuous by my own revert-and-rerun, my own
+additional adversarial inputs found no further bypass and no
+over-neutralization of safe content, and the full 174-test backend suite
+plus ruff/mypy are clean. Task 3C is closed out from the tester's side.
+
+[2026-07-04T17:00:00] TASK 3A VERIFY — START
+Verifying Task 3A (core loop endpoints: search/queue/abstract/decisions/saved)
+against BuildPlan.md lines 513-533 and SPEC.md §10.4/§7.9/§13.6. Reading
+senior-backend-developer.build.log START/PIVOT/COMPLETE entries, then
+running the full backend suite fresh (pytest -v, ruff check ., mypy app/)
+and reading source/test files directly rather than trusting 3A's or 3C's
+self-reported counts (3A's log claims 174 passed with 6 pre-existing
+failures in test_export.py at its own completion time; 3C's later log
+claims those are now fixed at 174/174 — need to confirm current reality).
+
+[2026-07-04T17:45:00] TASK 3A VERIFY — COMPLETE
+Scope checked: backend/app/routes/{search,queue,decisions,saved,_shared}.py,
+errors.py, clients.py, entities.py additions, tests/{test_search_routes,
+test_queue_routes, test_decisions_routes, test_saved_routes,_fakes}.py.
+Applicable §15 subsection: §15.3 (backend integration half — httpx.AsyncClient
+vs real SQLite, external-downtime error code, no stack-trace leakage).
+
+Fresh run results (backend/, .venv activated):
+- `pytest -v`: 174 passed, 0 failed, 0 errors, 1.36s. This supersedes 3A's
+  own stale COMPLETE-time snapshot ("174 passed... 6 pre-existing failures
+  in test_export.py") — those 6 export failures are confirmed GONE; 3C's
+  later PIVOT (adversarial-review fix to `_first_significant_char`) fixed
+  them for real, verified by rerunning the whole suite myself just now,
+  not by trusting 3C's or 3A's logs. test_export.py alone: 15/15 passing.
+- `ruff check .` (project-wide): All checks passed.
+- `mypy app/`: Success, no issues found in 30 source files.
+
+Item-by-item:
+1. httpx.AsyncClient vs real SQLite, fakes via dependency_overrides —
+   CONFIRMED. Every 3A test file builds a real `httpx.ASGITransport`-backed
+   AsyncClient against a locally-assembled FastAPI() + real
+   SessionIdentityMiddleware, backed by `db_engine` (tests/conftest.py) which
+   is a genuine on-disk SQLite file per test via tmp_path, not an in-memory
+   mock. `tests/_fakes.py`'s FakePubMedClient/FakeICiteClient are swapped in
+   via `app.dependency_overrides[get_pubmed_client]` — never respx. Read the
+   fakes directly: they are not rigged to trivially pass — `unavailable=True`
+   genuinely raises `PubMedUnavailableError` from esearch/esummary/efetch,
+   and every fake records its call args so tests can assert e.g. "efetch
+   never called" or "esummary never called on zero results."
+2. GET /papers/{pmid}/abstract — CONFIRMED calls Task 1D's
+   `build_segmented_abstract` on both cache-miss (via fresh EFetch) and
+   cache-hit (reconstructed from the new `Paper.abstract_sections` column)
+   paths (backend/app/routes/queue.py lines ~185-260). Response shape
+   checked field-by-field against CONTRACTS.md §1: pmid, narration_unavailable,
+   segments[].{index,kind,section_label,display_text,spoken_text,char_start,
+   char_end,pause_class} — 3A's own tests spot-check a subset
+   (pmid/narration_unavailable/segments[0].kind/display_text) rather than
+   the full shape, but the full per-field correctness of build_segmented_
+   abstract's output is already exhaustively covered by 1D's own
+   test_tokenize.py (golden corpus + exact-slice tests), which also ran
+   clean in this same suite — so the shape itself is not under-tested
+   project-wide, just not re-asserted field-by-field a second time in 3A's
+   own file, which is reasonable (redundant it wouldn't need re-verifying).
+   COVERAGE NOTE: `test_abstract_cache_hit_never_calls_pubmed` seeds the
+   `Paper.abstract_sections` row directly via a DB insert rather than
+   actually issuing a first (cache-miss) request and then a second
+   (cache-hit) request through the live API and diffing the two JSON
+   bodies for equality. The property "cache hit reconstructs the SAME
+   segmented response a fresh fetch would have produced" is therefore
+   *asserted only partially* (one segment's display_text, and that PubMed
+   is never called) rather than proven via a genuine two-request round
+   trip. This is a real, if minor, coverage gap relative to what was asked
+   to verify — flagging explicitly rather than treating "cache hit test
+   exists and is green" as equivalent to "round-trip proven."
+3. §13.6 external-downtime handling — CONFIRMED correct and well-tested.
+   Routes catch the specific `PubMedUnavailableError` class (defined in
+   app/integrations/pubmed.py, raised only on network error/5xx/exhausted-
+   429-retries/malformed 400, confirmed by reading pubmed.py directly), not
+   a broad `except Exception`. The one broad `except Exception` in
+   search.py/decisions.py (`_parse_search_body`/`_parse_body`) is narrowly
+   scoped to `request.json()` parsing only, re-raised as `validation_error`
+   — does not swallow unrelated bugs. Both queue.py branches are genuinely,
+   separately tested: `test_queue_serves_cached_decisions_when_pagination_
+   follow_up_fails` (200, existing 2 cached items still served, follow-up
+   silently logged-and-swallowed) and `test_queue_returns_service_
+   unavailable_when_nothing_cached_and_pubmed_down` (503 service_unavailable,
+   a SearchSession with total_result_count=10 but zero QueueDecision rows
+   yet). These are two distinct, independently-constructed scenarios, not
+   one test doing double duty.
+4. Session-scoping — PARTIALLY CONFIRMED, with a real gap. decisions.py
+   and saved.py both filter every query by `QueueDecision.session_id ==
+   session.session_id` (read directly). `test_patch_decision_not_found_
+   for_other_sessions_pmid` exists but is WEAKER than the cross-session
+   pattern Task 3C's own fix established (two independent TestClient/cookie
+   jars, each with a real CSPRNG session_id, each holding decisions on the
+   overlapping PMID) — 3A's version uses "no cookie set" (a brand-new
+   session auto-issued by the middleware) rather than a second concrete,
+   pre-seeded session attempting to read/mutate the first session's row.
+   Functionally it does exercise the session_id filter, but it is not the
+   sharpest version of the test (same-PMID, two real sessions, each with
+   their own row) that 3C's own post-tester fix demonstrated is necessary
+   to actually prove the boundary rather than assume it from reading the
+   query. More importantly: **test_saved_routes.py has NO cross-session
+   test at all** — neither `GET /saved` nor `DELETE /saved/{pmid}` has any
+   test proving session A cannot see/remove session B's saved papers, and
+   neither test_search_routes.py nor test_queue_routes.py has one either
+   for SearchSession/QueueDecision reads. This is exactly the same class of
+   gap the tester (per a prior verification cited in 3C's own PIVOT log)
+   already found and required fixing in Task 3C's export.csv — it was not
+   carried over as a required pattern to 3A's four route files. Given saved
+   list / decisions / queue are anonymous-session security boundaries
+   identical in kind to export.csv, this is a genuine, not hypothetical,
+   coverage gap.
+5. Entity field wiring — CONFIRMED clean, no duplication: `Paper.language`/
+   `retracted`/`abstract_sections` and `SearchSession.total_result_count`/
+   `next_retstart` are new, additive, non-conflicting with 1B's
+   `EFetchArticle.language`/`publication_types`/`retracted` (pubmed.py
+   already computes `retracted` from `publication_types` via
+   `_RETRACTED_MARKERS`, confirmed by reading pubmed.py directly) — 3A's
+   `queue.py` correctly copies `article.language`/`article.retracted` onto
+   the `Paper` row on EFetch. COVERAGE/COMPLETENESS GAP found while
+   checking this: `Paper.retracted` is persisted correctly but is never
+   surfaced in any API response — `QueueItem` (search.py/queue.py) and
+   `SavedItem` (saved.py) both lack a `retracted` field, and
+   `SegmentedAbstractResponse` (CONTRACTS.md §1, pinned shape) also has no
+   `retracted` field. SPEC.md §13.4 calls for surfacing this "in the
+   metadata line or as a visible badge on the card," and app/integrations/
+   pubmed.py's own docstring explicitly says the field exists "for Task
+   2B's retracted badge" — but as things stand, no endpoint returns it, so
+   a later frontend/integration task cannot actually render that badge
+   without a further backend change. Flagging as an incomplete-wiring gap,
+   not a bug in what exists.
+6. No stack-trace/exception leakage — CONFIRMED for the paths actually
+   tested: search.py (`test_search_pubmed_unavailable_returns_service_
+   unavailable` asserts both "Traceback" and "PubMedUnavailableError" are
+   absent from the response body), queue.py's equivalent 503 test asserts
+   "Traceback" absent, decisions.py's validation-error test asserts
+   "Traceback" absent. `app/errors.py` itself only ever emits pre-written
+   safe strings (never interpolates `str(exc)` into a message) — read
+   directly, confirmed. saved.py has no equivalent explicit leakage
+   assertion in its own test file, though saved.py also makes no external
+   calls and its only error path is a plain not_found with a pmid echoed
+   back (not exception internals) — low risk, but noting the asymmetry.
+7. PATCH /decisions/{pmid} and DELETE /saved/{pmid} on nonexistent PMID —
+   CONFIRMED clean 404s, not crashes/silent no-ops:
+   `test_patch_decision_not_found_for_unknown_pmid` and
+   `test_delete_saved_not_found_when_not_currently_saved` both assert
+   404 + `{"error":{"code":"not_found"}}` via genuine HTTP round trips.
+
+No failures to report — the suite is fully green and the code paths
+inspected match what the tests claim to cover, for the parts that are
+covered.
+
+Verdict: Task 3A checkpoint — the cited tests are GREEN (174/174, ruff
+and mypy clean project-wide) and §15.3's core requirements (real
+httpx.AsyncClient + real SQLite, fakes via dependency_overrides, correct
+distinction between PubMedUnavailableError-503 vs cached-data-200,
+CONTRACTS.md-shaped errors, no leakage) are genuinely met, not just
+claimed. However I am NOT calling coverage fully sufficient: (a) session-
+isolation is under-tested across 3 of 4 route files (search/queue/saved
+have zero cross-session tests; decisions.py's own cross-session test is
+weaker than the pattern 3C's own fix already established as necessary) —
+same class of gap this project has already had to fix once this wave; (b)
+the abstract cache-hit test proves "PubMed not called" and "one segment
+looks right" but not a genuine two-request round-trip equality check; (c)
+`Paper.retracted` is computed and stored correctly but never exposed via
+any API response, so SPEC §13.4's "retracted badge" requirement is not
+actually deliverable to the frontend yet despite the backend log claiming
+the field was added "as needed." None of these are implementation bugs —
+they are coverage/completeness gaps in what 3A itself built and tested.
+Recommend: keep the Tier 3 Wave 1 gate open for 3A pending (a) added
+cross-session tests for search/queue/saved mirroring 3C's fixed pattern,
+and (b) a decision on whether `retracted` exposure belongs in this task's
+scope or is explicitly deferred to a later task (and documented as such,
+not silently dropped).
+
+[2026-07-04T18:00:00] TASK 3B RE-VERIFY — START
+Re-verifying senior-backend-developer's PIVOT fix (auth_callback's
+db.commit() -> db.flush() atomicity fix) against the "TASK 3B REVIEW"
+finding #2 in logs/adversarial-generalist.build.log (non-atomic
+two-commit sequence risking a session-fixation window). Relevant §15
+subsection: §15.1 (backend unit) plus §15.7 (OAuth) since this is
+specifically the session-binding/rotation atomicity property under
+that heading. Read senior-backend-developer's TASK 3B PIVOT entry and
+adversarial-generalist's TASK 3B REVIEW finding #2 first, then read
+backend/app/routes/zotero.py and backend/app/models/identity.py
+(rotate_session) and backend/app/db.py (get_session) directly rather
+than trusting the log's paraphrase.
+
+[2026-07-04T18:20:00] TASK 3B RE-VERIFY — COMPLETE
+
+1. Code inspection (backend/app/routes/zotero.py, auth_callback,
+   lines 149-185): confirmed there is genuinely only ONE db.commit()
+   call in the successful path, inside rotate_session (backend/app/
+   models/identity.py line 70). The ZoteroConnection insert at line
+   170 is followed only by db.flush() (line 174), which pushes the
+   INSERT to the DB within the open transaction (visible to
+   rotate_session's own subsequent SELECT of session-scoped rows) but
+   is not durable — nothing survives a rollback or an uncommitted
+   connection close after a flush alone. backend/app/db.py's
+   get_session() uses `with Session(get_engine()) as session: yield
+   session`; SQLAlchemy's Session context manager closes the session
+   on exit (including exceptional exit) without committing, which
+   rolls back any not-yet-committed work. This matches the claimed
+   fix exactly — confirmed by direct reading, not by trusting the
+   PIVOT log's description.
+
+2. Ran `pytest -v tests/test_zotero_routes.py -k atomic`:
+   test_callback_failure_between_connection_insert_and_rotation_is_atomic
+   PASSED.
+   Non-vacuousness check: temporarily edited auth_callback to restore
+   the old two-commit pattern (db.add(connection); db.commit() in
+   place of db.flush(), immediately before calling rotate_session),
+   re-ran the same test, and confirmed it now FAILS with:
+     AssertionError: assert ZoteroConnection(session_id='ueiyOQPAym2n...',
+     zotero_user_id='123456', ...) is None
+     + where ZoteroConnection(...) = first()
+   at tests/test_zotero_routes.py:255 (`assert db.exec(select(ZoteroConnection)).first() is None`)
+   — i.e. under the old pattern the connection row DOES survive,
+   durably attached to the pre-rotation session_id, exactly the defect
+   the review flagged. Restored app/routes/zotero.py from a pre-edit
+   backup immediately after; `diff` against the backup confirmed the
+   file is byte-identical to its pre-experiment state. This confirms
+   the test is a genuine regression guard, not a vacuous pass.
+
+3. Ran `pytest -v tests/test_zotero_routes.py -k "unreachable or decrypt"`:
+   test_callback_returns_service_unavailable_when_zotero_is_unreachable
+   PASSED; test_collections_returns_service_unavailable_when_stored_token_fails_to_decrypt
+   PASSED. Read both assertions directly: the unreachable test asserts
+   503 + code "service_unavailable" + zero ZoteroConnection rows after
+   a mocked 503 from Zotero's access-token endpoint. The decrypt-failure
+   test seeds a ZoteroConnection with a deliberately non-Fernet
+   oauth_token ("not-actually-encrypted-ciphertext"), hits /zotero/collections,
+   and asserts `"not-actually-encrypted-ciphertext" not in response.text`
+   in addition to the 503/service_unavailable shape — this is a genuine
+   leak check on the full response body, not just a status-code check.
+
+4. Ran full backend suite: `pytest -v` (no -x/--maxfail) => 177 passed,
+   1 warning (an unrelated pre-existing StarletteDeprecationWarning about
+   httpx/starlette.testclient), 0 failures. Matches the PIVOT log's
+   claimed count exactly; no regressions visible across 3A/3C's
+   concurrent work at this snapshot.
+
+5. `ruff check .` => "All checks passed!". `mypy app` => "Success: no
+   issues found in 30 source files". Both clean.
+
+No coverage gaps found specific to this fix — the atomicity property,
+the two previously-missing route-layer error-mapping paths, and the
+ciphertext-non-leak property are all now covered by real, non-vacuous
+assertions I verified could actually fail.
+
+Verdict: Task 3B atomicity fix VERIFIED. The single-commit-via-flush
+fix is real (confirmed by code reading and context-manager semantics),
+its regression test is non-vacuous (confirmed by reverting the fix and
+watching the test fail with the exact expected symptom), the two
+additional route-layer tests pass and genuinely check what they claim
+(service_unavailable mapping + no-ciphertext-leak), and the full 177-test
+backend suite plus ruff/mypy are clean. Task 3B is safe to treat as
+fully closed out on this specific finding.
+
+[2026-07-04T19:00:00] TASK 3A RE-VERIFY — START
+Re-verifying the 3 fixes senior-backend-developer claims to have made
+(cross-session isolation tests for /queue,/saved,/decisions; strengthened
+abstract cache-hit round-trip test; retracted:bool field on QueueItem/
+SavedItem + CONTRACTS.md §5) against my prior TASK 3A VERIFY findings.
+Plan: run full backend suite (pytest -v, ruff, mypy), read the 3 new
+cross-session tests directly, pick one and adversarially bypass the
+session filter to confirm non-vacuousness, read the strengthened cache
+test, verify retracted field end-to-end via a real request, and check
+CONTRACTS.md §5 + confirm SegmentedAbstractResponse was NOT touched.
+
+[2026-07-04T19:40:00] TASK 3A RE-VERIFY — PIVOT
+While independently proving non-vacuousness of the cross-session isolation
+tests (item 2 of the ask), removing decisions.py's session_id filter
+entirely did NOT make test_decisions_cross_session_isolation_with_
+overlapping_pmid fail — SQLite returned rows in insertion order and
+session_a's row happened to be inserted first, so `.first()` with no
+session filter coincidentally still returned session_a's own row for
+client_a's PATCH. Investigated rather than accepting this as "proven":
+wrote an ad hoc adversarial test (not committed) where session_b (not
+session_a) issues the PATCH against the same filter-removed route — this
+DID fail with a genuine cross-session mutation (row_a.decision flipped to
+"interested" from session_b's request), proving the underlying
+session_id filter is a real, necessary security boundary and that SOME
+adversarial framing does catch its absence. But the actual committed
+test only ever has session_a (the first-inserted, "correct" owner) issue
+the request, so it does not actually exercise the attack direction that
+would reveal a missing/broken filter — it is directionally vacuous
+against this specific removal, purely by accident of row insertion
+order. Restored decisions.py immediately after confirming (git diff
+clean, 181/181 still passing).
+
+[2026-07-04T19:50:00] TASK 3A RE-VERIFY — COMPLETE
+Ran fresh in backend/ (.venv activated):
+- `pytest -v`: 181 passed, 0 failed, 0 errors, 1.4-1.5s. Matches senior-
+  backend-developer's claimed count exactly.
+- `ruff check .`: All checks passed.
+- `mypy app/`: Success, no issues found in 30 source files.
+
+Item-by-item against the 5 verification asks:
+
+1. Full suite/lint/type-check — CONFIRMED, 181/181, ruff clean, mypy clean,
+   no regressions vs. my prior 174-passing baseline (net +7: the 4 tests
+   listed in senior-backend-developer's log, i.e. queue cross-session +
+   retracted-flag + saved cross-session + decisions cross-session, plus
+   the strengthened round-trip test replacing the old spot-check nets to
+   the stated total once counted correctly against 174).
+
+2. Cross-session isolation tests — READ all three directly
+   (test_queue_cross_session_isolation, test_saved_cross_session_
+   isolation, test_decisions_cross_session_isolation_with_overlapping_
+   pmid). All three genuinely use two independent httpx.AsyncClient
+   instances / cookie jars against the same app+DB, each with a real
+   session_id issued by the middleware (or seeded directly + signed via
+   `_sign`), and all three deliberately use an OVERLAPPING PMID across
+   both sessions (not disjoint datasets) — this is the sharper pattern
+   Task 3C established, correctly mirrored.
+   Adversarial non-vacuousness check (asked to pick ONE): I picked the
+   decisions.py test. Removing the `QueueDecision.session_id ==
+   session.session_id` filter from the route's query did NOT make the
+   committed test fail (see PIVOT entry above) — because the test's
+   PATCH always originates from session_a, whose row happens to be the
+   first-inserted row that `.first()` returns even with no session
+   filter at all. I confirmed independently (via an uncommitted, throw-
+   away variant test where session_b — not session_a — issues the PATCH)
+   that removing the filter IS a real, catchable leak in the general
+   case (session_b's PATCH mutated session_a's row: `AssertionError:
+   LEAK: session B mutated session A's row! row_a.decision=interested`,
+   diff `- pending / + interested`) — so the route's session-scoping is
+   real and necessary, just not exercised in the direction that would
+   catch its total absence by the actual committed test. This is a
+   genuine, if narrow, coverage gap: the committed test would not catch
+   a regression that dropped decisions.py's session_id filter entirely,
+   purely due to accidental row-ordering, even though it looks like (and
+   was intended as) the adversarial two-session pattern.
+   I did NOT check the queue/saved cross-session tests for the same
+   ordering coincidence beyond reading them (both use asymmetric queries
+   — response_a vs response_b, and query on both PMID sets — which makes
+   an ordering-only leak far less likely to hide there than in
+   decisions.py's single-row `.first()` pattern; flagging this
+   explicitly as unconfirmed rather than assuming it's fine).
+
+3. Abstract cache round-trip test — READ test_abstract_cache_hit_is_a_
+   genuine_round_trip_of_the_first_fetch directly. CONFIRMED it is two
+   real HTTP requests through the live ASGI app (not one request + a
+   direct DB assertion): request 1 asserts `fake_pubmed.efetch_calls ==
+   [["1"]]` (genuine cache miss), request 2 re-asserts the exact same
+   list (proving EFetch was NOT called again), and `first.json() ==
+   second.json()` asserts full-body byte-for-byte equality. Adversarially
+   confirmed non-vacuousness myself: short-circuited the cache-hit branch
+   in queue.py (`if False and paper is not None and paper.abstract_
+   sections is not None:`) to force every request through EFetch, reran
+   — test failed exactly as expected: `AssertionError: assert [['1'],
+   ['1']] == [['1']]`. Restored the route immediately after (git diff
+   clean, 181/181 confirmed again). This test is genuinely non-vacuous
+   and would catch caching being silently broken.
+
+4. CONTRACTS.md §5 + retracted field — READ CONTRACTS.md §5 directly:
+   field name (`retracted`), type (`bool`), source (`Paper.retracted`),
+   and the "false may mean not-yet-known, not confirmed-not-retracted"
+   caveat are all present and clearly spelled out, with an explicit
+   pointer to which endpoints carry it (POST /search, GET /queue, GET
+   /saved) — sufficient for Task 4A to consume without guessing.
+   Made real end-to-end requests myself (not trusting the test suite
+   alone): POST /search and GET /queue both genuinely return
+   `"retracted": true/false` in their real JSON bodies keyed off
+   `Paper.retracted`; GET /saved likewise returns `"retracted": true` for
+   a Paper seeded with `retracted=True`. Read test_queue_item_reflects_
+   persisted_retracted_flag directly — it searches first (queue item
+   built from ESummary alone, no retracted data yet), THEN persists
+   `Paper.retracted = True` directly to the DB (simulating what a real
+   abstract-fetch would have done), THEN re-fetches GET /queue and
+   asserts `items[0]["retracted"] is True` — this is a genuine DB-to-API
+   round trip, not a hardcoded stub value.
+
+5. SegmentedAbstractResponse scope — READ app/text/tokenize.py directly:
+   `SegmentedAbstractResponse` (pmid, narration_unavailable, segments)
+   has NOT been touched — no `retracted` field added to it. Confirmed
+   deliberately correct, no scope creep.
+
+Verdict: Task 3A checkpoint is MET on the concrete asks (181/181 green,
+lint/type clean, retracted field genuinely wired end-to-end and
+documented, cache round-trip test genuinely non-vacuous, no accidental
+scope creep on SegmentedAbstractResponse). However, I am flagging ONE
+new, real coverage gap discovered during adversarial verification (not
+present in my original TASK 3A VERIFY list, so this is new information
+from today's re-check): test_decisions_cross_session_isolation_with_
+overlapping_pmid would NOT catch a regression that dropped decisions.py's
+session_id filter entirely, because it only exercises the request
+direction (session_a acting on session_a's own row) that coincidentally
+still "works" even with the filter gone, due to SQLite's insertion-order
+`.first()` behavior. The queue/saved versions were not independently
+adversarially confirmed either way. This is a narrow gap in an otherwise
+solid test — the underlying route behavior IS correct and IS a real
+security boundary (proven via my own throwaway variant), just not
+proven by the test as committed. Given this is the only known gap
+remaining and the original 3 broader gaps are all genuinely closed, I
+would not block Tier 3 Wave 1 on this alone, but recommend Task 3A (or
+whichever agent owns decisions.py) add one more assertion/variant to
+test_decisions_cross_session_isolation_with_overlapping_pmid where
+session_b (not session_a) issues the PATCH, to close this specific blind
+spot before treating decisions.py's cross-session coverage as airtight.
+
+[2026-07-04T20:15:00] TASK 3A FINAL VERIFY — START
+Verifying senior-backend-developer's claimed fix to the directional
+blind spot in test_decisions_cross_session_isolation_with_overlapping_pmid
+(backend/tests/test_decisions_routes.py), per their PIVOT entry and my
+own prior TASK 3A RE-VERIFY finding.
+
+[2026-07-04T20:32:00] TASK 3A FINAL VERIFY — COMPLETE
+1. Read the parametrized test directly (backend/tests/test_decisions_routes.py,
+   lines 106-183). Confirmed: parametrized over `insert_actor_row_first`
+   (True/False, ids `actor_row_inserted_first` / `other_session_row_inserted_first`),
+   both branches insert one QueueDecision row per session on the SAME
+   overlapping PMID, only the row-insertion order differs between the two
+   parametrized cases, and in BOTH cases the PATCH is issued exclusively by
+   client_a (session A) — matches the claim exactly. Docstring accurately
+   describes the blind spot and the fix.
+
+2. Ran `pytest tests/test_decisions_routes.py::test_decisions_cross_session_isolation_with_overlapping_pmid -v`
+   with the real filter in place: both parametrized cases passed
+   (2 passed).
+
+   Non-vacuousness check: backed up app/routes/decisions.py (sha256
+   3ac0e7264ee556ed41c702503cfb6af0f2fcfa81566fd0a1fb573e92f1805802) to
+   /tmp/decisions.py.orig, then stripped the
+   `QueueDecision.session_id == session.session_id` clause from
+   update_decision's query (left only `QueueDecision.pmid == pmid`).
+   Reran the same test:
+   - `other_session_row_inserted_first`: FAILED as expected —
+     `AssertionError: assert <DecisionState.pending: 'pending'> == <DecisionState.interested: 'interested'>`
+     (diff: `- interested` / `+ pending`) — i.e. client_a's PATCH did NOT
+     take effect on row_a because `.first()` returned session_b's
+     first-inserted row instead once the session_id filter was gone.
+   - `actor_row_inserted_first`: still PASSED (1 failed, 1 passed overall,
+     not 2 failed).
+
+   IMPORTANT CORRECTION to the verification ask as worded: the task
+   description asked me to "confirm BOTH parametrized cases now fail
+   (not just one)" once the filter is stripped. That is not what happens,
+   and — per senior-backend-developer's own PIVOT entry — it was never
+   claimed to happen there either: they explicitly wrote
+   "`actor_row_inserted_first` still incidentally passes (expected —
+   that was always the 'gets lucky' direction, per tester's own finding)."
+   My empirical result (1 fail / 1 pass) matches that exact prediction,
+   not the "both fail" framing in the verification ask. The relevant and
+   correct criterion — which IS satisfied — is that at least one of the
+   two parametrized cases (both of which pytest always runs) now fails
+   when the filter is missing, closing the blind spot where the
+   pre-fix, non-parametrized test never failed under either ordering.
+   I'm flagging this discrepancy explicitly rather than silently
+   reporting "confirmed" against a premise that doesn't hold, since
+   the wrong premise could mislead whoever reads this log next.
+
+   Restored app/routes/decisions.py from the backup; verified via both
+   `shasum -a 256` (identical: 3ac0e7264ee556ed41c702503cfb6af0f2fcfa81566fd0a1fb573e92f1805802)
+   and `diff` (no output) that the file is byte-identical to before the
+   ablation. (Note: decisions.py and its test file are untracked in git
+   at this point in the branch's history, so `git diff` alone would not
+   have caught a restoration failure here — used a checksum instead.)
+
+3. Ran the full backend suite fresh: `pytest -v` => 182 passed, 0 failed,
+   0 errors, 1.50s (1 unrelated deprecation warning re: httpx/starlette
+   testclient, not a failure). `ruff check .` => All checks passed.
+   `mypy app/` => Success, no issues found in 30 source files.
+
+Verdict: Task 3A directional-test fix VERIFIED (the parametrization
+genuinely closes the blind spot — a missing session_id filter is now
+guaranteed to be caught by at least one of the two parametrized cases
+on every run, which is the property that matters, even though the
+literal "both cases fail" phrasing in the verification ask does not
+hold and was never actually claimed by the implementer either).
+Tier 3 Wave 1 (3A/3B/3C) ready for adversarial review: YES.
+
+[2026-07-04T22:00:00] TASK 3A ADVERSARIAL-FIX VERIFY — START
+Verifying senior-backend-developer's 2 claimed fixes for adversarial-generalist's
+TASK 3A REVIEW significant findings: (1) test_search_cross_session_isolation in
+test_search_routes.py (§15.1/§15.3 session-isolation), (2) PubMedParseError
+distinguishing genuine-empty vs. all-articles-failed/whole-doc-unparsable in
+pubmed.py, mapped to 500 internal_error in queue.py (§15.1/§15.8-adjacent
+error-taxonomy correctness). Will run full backend suite, read the new test
+and source code directly, and independently strip the session_id filter to
+confirm non-vacuousness myself rather than trusting the log's self-report.
+
+[2026-07-04T22:20:00] TASK 3A ADVERSARIAL-FIX VERIFY — COMPLETE
+1. Full backend suite: `pytest -q` => 187 passed, 0 failed. `ruff check .`
+   => All checks passed! `mypy app/` => Success: no issues found in 30
+   source files. Matches senior-backend-developer's self-report exactly.
+
+2. Fix #1 (search.py cross-session isolation): read
+   backend/tests/test_search_routes.py::test_search_cross_session_isolation
+   directly (lines 75-146). Confirmed it genuinely uses two independent
+   httpx.AsyncClient/cookie-jar sessions (client_a, client_b) against the
+   same app+DB, with overlapping PMID "2" (session B searches ["2","3"]
+   first, session A searches ["1","2"] then re-searches ["4"], exercising
+   §3.5's delete-then-rebuild path), and asserts both /search/settings and
+   the raw QueueDecision table rows stay fully isolated per session.
+   Independently re-verified non-vacuousness myself (not trusting the
+   log): stripped `.where(QueueDecision.session_id == session.session_id)`
+   from the stale-decision cleanup query in app/routes/search.py (line
+   176) down to a bare `select(QueueDecision)`. Reran the single test:
+   FAILED with `KeyError: 'DWvMIHOGnd6KNW-LkjshUE4SmQjPXlAOSBJjd8CKjmI'`
+   at `assert by_session[session_b_id] == {"2", "3"}` (tests/
+   test_search_routes.py:146) — session A's re-search wiped session B's
+   rows entirely once the filter was gone, exactly the leak the test is
+   meant to catch. Restored the filter exactly as it was; `git diff
+   backend/app/routes/search.py` came back empty (byte-identical).
+   Verdict: genuinely load-bearing, not decorative.
+
+3. Fix #2 (PubMedParseError in pubmed.py): read `_parse_efetch_xml`
+   directly (backend/app/integrations/pubmed.py lines 445-505).
+   (a) Zero `<PubmedArticle>` elements: `article_elements` is empty, so
+       the `if article_elements and not articles:` guard (line 490) is
+       false regardless of `articles`, and the function returns `[]`
+       normally — confirmed by test_efetch_zero_article_elements_is_a_
+       legitimate_empty_result (line 260), which asserts `articles == []`
+       for an empty `<PubmedArticleSet></PubmedArticleSet>` body. Genuine
+       not-found stays [], not a false 500.
+   (b) All elements present but all fail to parse: `articles` stays empty
+       while `article_elements` is non-empty, so the guard is true and it
+       raises `PubMedParseError` — confirmed by
+       test_efetch_raises_parse_error_when_every_article_fails_to_parse
+       (line 278, two PMID-less PubmedArticle elements, no well-formed
+       sibling, `pytest.raises(PubMedParseError)`). Whole-document
+       ET.ParseError case (malformed top-level XML) also raises
+       PubMedParseError via the except-block at line 467-469, confirmed
+       by test_efetch_raises_parse_error_on_whole_document_xml_parse_
+       failure (line 316, body `"<not><valid xml"`).
+   (c) Mixed batch (one fails, one succeeds): confirmed this does NOT
+       raise — pre-existing test_efetch_skips_malformed_record_without_
+       failing_batch (line 226, one PMID-less element + one well-formed
+       sibling) asserts `len(articles) == 1` and `articles[0].pmid ==
+       "12345678"`, no exception. This is exactly the intended behavior
+       per §7.9 (one malformed record must not fail the whole batch) and
+       the fix's own docstring says so explicitly.
+   All three scenarios are genuinely exercised by 3 distinct new tests
+   plus the correctly-still-passing pre-existing mixed-batch test — not
+   just a subset.
+
+4. app/errors.py's `internal_error()` (lines 73-85): takes a caller-
+   supplied safe default message string
+   ("Something went wrong on our end. Please try again shortly.") and
+   never interpolates `str(exc)` or any exception object into the
+   response body — confirmed by reading the function and its call site
+   in queue.py (lines 244-256), which logs the real `exc` at ERROR via
+   `logger.error(...)` (server-side only) and raises
+   `internal_error("Something went wrong while fetching this paper...")`
+   with a separate hardcoded string, never the caught exception itself.
+
+5. queue.py's exception handling (lines 237-259): `PubMedParseError` is
+   caught in its own `except` clause (line 244), separate from
+   `PubMedUnavailableError` (line 239, -> 503 service_unavailable) and
+   separate from the `if not articles: raise not_found(...)` branch
+   (line 258-259, still reachable only for genuine empty non-exception
+   results) -> raises `internal_error(...)` (500). Made a real request
+   via TestClient in backend/tests/test_queue_routes.py::
+   test_abstract_systemic_parse_failure_is_internal_error_not_not_found
+   (line 334): asserts `response.status_code == 500`,
+   `body["error"]["code"] == "internal_error"`, and explicitly asserts
+   `"PubMedParseError" not in response.text` and `"Traceback" not in
+   response.text` — confirms no raw exception text/stack trace leaks to
+   the client. Test passes (part of the 187/187 run above). Confirmed
+   `FakePubMedClient.efetch_exception` (backend/tests/_fakes.py lines
+   32/67-68) genuinely raises the supplied exception from `efetch()`
+   alone, without touching esearch/esummary — a real, non-mocked-away
+   code path through queue.py's route handler.
+
+Coverage note: the new tests are precise and non-vacuous, not just
+present-for-appearance's-sake. I did not find any weak/tautological
+assertions in the 4 new/reviewed tests (test_search_cross_session_
+isolation, the 3 pubmed_client tests, the 1 queue_routes test).
+
+Verdict: Task 3A adversarial fixes VERIFIED. Tier 3 Wave 1 (3A/3B/3C)
+fully closed: YES — both significant findings from adversarial-generalist's
+TASK 3A REVIEW are genuinely fixed and covered by non-vacuous tests, full
+backend suite is green (187/187), ruff and mypy are clean, and my own
+independent filter-stripping check confirms the isolation test is
+load-bearing rather than decorative.

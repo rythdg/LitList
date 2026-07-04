@@ -97,6 +97,26 @@ objects, request URLs with query params, or `%r`-formatted external
 API payloads, rather than relying on adversarial review to catch each
 instance ad hoc. Flagging forward to Task 3D's brief.
 
+[2026-07-04] Tier 3 Wave 1 (Tasks 3A, 3B, 3C) dispatched in parallel
+per BuildPlan.md lines 513-552. All of Tier 1 (1A/1B/1C/1D) is merged,
+satisfying the tier's dependency gate. 3B is additionally briefed to
+resolve the SPEC.md §10.4 Zotero-disconnect endpoint gap flagged during
+Tier 2 (frontend's useDisconnectZotero placeholder). Wave 2 (Task 3D,
+cross-cutting middleware) intentionally held back until Wave 1 merges,
+since its own test gate requires 3A/3B/3C's routes to already exist —
+per this plan's own note, it cannot run concurrently with the routes
+it wraps.
+
+[2026-07-04] Task 3C — MERGE CONFIRMED (post-fix)
+Formula-injection fix independently re-verified with full rigor:
+tester reverted the fix, reproduced all 6 new test failures exactly,
+restored it, then constructed additional adversarial inputs of its own
+(ZWJ character, multiple leading whitespace, mixed whitespace+Cf) and
+confirmed correct neutralization AND confirmed safe content ("  hello")
+is correctly left unmodified (no over-neutralization). 174/174 full
+suite green. Task 3C fully closed — both tester and adversarial gates
+cleared post-fix.
+
 [2026-07-04] Task 1B — MERGE CONFIRMED (post-fix)
 Credential-leak fix independently re-verified: tester read the fixed
 code, confirmed the new tests are non-vacuous by reverting the fix and
@@ -113,3 +133,31 @@ exact original raw-token-dict leak in the log output, restored
 byte-identical. Full suite 121/121 green, ruff/mypy clean. Ready to
 merge pending Task 1D's in-flight fix (≤/≥ narration gap, duplicate
 AbstractSection type, missing flattened spoken_abstract).
+
+[2026-07-04] Task 3B — MERGE CONFIRMED (post-fix)
+Atomicity fix independently re-verified with the same revert-reproduce-
+restore rigor as every fix this build: tester reverted the two-commit
+pattern, reproduced the exact orphaned-connection defect the review
+predicted, restored it byte-identical. 177/177 full suite green,
+ruff/mypy clean. Task 3B fully closed — tester, adversarial, and
+post-fix re-verification all cleared.
+
+[2026-07-04] Task 3A — MERGE CONFIRMED, Tier 3 Wave 1 fully closed
+Task 3A went through 5 verification rounds before closing — the most
+of any task this build, proportionate to being the largest/most
+central Wave 1 task: (1) initial tester pass found 3 real gaps
+(cross-session isolation untested for search/queue/saved, a
+non-round-trip cache test, Paper.retracted computed but never exposed
+in any API response); (2) fixed, re-verified, tester found one more
+narrow gap (a directionally-blind cross-session test for decisions.py
+that got lucky with SQLite insertion order); (3) fixed, re-verified
+clean; (4) adversarial review found 2 more significant gaps
+(search.py itself still lacked the cross-session test pattern; EFetch
+parse failures were indistinguishable from genuine 404s, capable of
+hiding a systemic backend bug behind an ordinary "not found" response);
+(5) fixed and re-verified, including independently reproducing every
+fix's underlying defect before confirming the fix closes it. 187/187
+final suite, ruff/mypy clean.
+Tier 3 Wave 1 (Tasks 3A, 3B, 3C) is now fully merged. Tier 3 Wave 2
+(Task 3D, cross-cutting middleware) is unblocked — its own test gate
+requires 3A/3B/3C's routes to exist, which they now do.
