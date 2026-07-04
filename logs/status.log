@@ -86,3 +86,85 @@ Do not delete or rewrite prior entries.
   Tier 3, both now done). Reminder: BuildPlan.md's Task 4A section
   carries the design/ kit reconciliation notes from earlier — keep
   LLPaperCard's drag-gesture math as reference, discard the rest.
+
+---
+
+## RESUME POINT — read this first if picking this build back up
+
+**State as of 2026-07-04:** Tiers 0, 1, 2, and 3 are fully built, verified,
+committed to `main`, and working-tree-clean. Backend: 212/212 tests
+passing, ruff/mypy clean. Frontend: 21 files/83 tests passing, lint/
+typecheck/build clean. **Tier 4 has not started.**
+
+**Next task per BuildPlan.md:** Tier 4 — Frontend↔backend integration
+(lines 580-625), parallel, 3 subagents, depends on Tier 2 + Tier 3
+(both done, dependency gate satisfied):
+- **4A** — core loop wiring (TanStack Query hooks point at real 3A
+  endpoints; single decision function ties swipe/tap/keyboard together;
+  swipe gesture per BuildPlan's design-kit reconciliation note added
+  this build — see BuildPlan.md's Task 4A section directly, don't
+  reconstruct from memory, it has full detail on what to keep/discard
+  from `design/`).
+- **4B** — Zotero export wiring (OAuth redirect round-trip through 2A's
+  callback route, push/disconnect wiring to 3B).
+- **4C** — offline & error-handling unification (shared error component
+  consuming CONTRACTS.md §2's shape, §13.6 vs §4.5 distinct copy).
+
+**Orchestrator process reminder for whoever resumes:** every task this
+build went through the same pipeline — specialist implements+tests →
+`tester` independently verifies (don't trust the specialist's own
+COMPLETE entry) → `adversarial-generalist` reviews (required even when
+tester found nothing) → orchestrator merges only once both gate entries
+exist in their respective build logs → commit to git → log here. Fixes
+found by either gate get sent back to the ORIGINAL specialist agent via
+SendMessage (resume, don't respawn) and are re-verified with the same
+revert-reproduce-restore rigor before being accepted — this caught
+every real bug found this build (see logs/orchestrator.log for the
+full blow-by-blow). Don't skip a step even when a task "looks simple."
+
+**Backlog / carried-forward items (none blocking, but don't lose them):**
+1. `OAuthSessionBinding` (backend/app/middleware/session.py) has no
+   proactive expiry sweep, only lazy expiry-on-resolve — abandoned
+   OAuth handshakes accumulate in the single always-on process. Revisit
+   at Task 5A (infra) when a natural periodic-task hook exists.
+2. Ephemeral `TOKEN_ENCRYPTION_KEY`/`SESSION_COOKIE_SECRET` fallback
+   only logs a warning, no environment-aware fail-fast — a real
+   deployment booted without these set silently loses encrypted Zotero
+   tokens on restart. Revisit at Task 5A when a real deploy environment
+   exists to fail-fast against (local dev already has real values set
+   in `backend/.env`, so this isn't live today).
+3. No unique DB constraint on `(session_id, pmid)` for `QueueDecision`
+   despite SPEC §9.2 describing one row per pair. Minor, cheap, still
+   open — pick up whenever touching that model next.
+4. The credential-in-logs pattern (2 confirmed instances this build:
+   NCBI key/email, raw Zotero tokens) has no systemic guard — Task 3D
+   considered a repo-wide lint rule against logging raw request/response
+   objects and deferred it as heuristic/false-positive-prone. Still
+   worth revisiting with a clearer convention if a third instance shows
+   up, or before Task 5B's CI is finalized.
+5. The new IP-based rate-limiter key (Task 3D) has no reverse-proxy/
+   `X-Forwarded-For` awareness — correct for today's direct-to-host
+   local dev, but will collapse all real users into one IP bucket if a
+   reverse proxy is introduced without trusted-proxy config. Must
+   revisit at Task 5A if Render (or similar) sits behind a proxy.
+6. No test forces `export.py`'s mid-stream logging wrapper (Task 3D
+   fix) to actually fire on a real exception — coverage gap, not a
+   correctness gap.
+
+**Credentials status** (full detail in logs/creds.log):
+- `ZOTERO_CLIENT_KEY`/`ZOTERO_CLIENT_SECRET` — RECEIVED, in
+  `backend/.env` (git-ignored). Real OAuth handshake can be manually
+  sanity-checked now if desired.
+- `TOKEN_ENCRYPTION_KEY`/`SESSION_COOKIE_SECRET` — generated and set in
+  `backend/.env`.
+- `NCBI_API_KEY`/`NCBI_EMAIL` — not needed yet (all PubMed tests are
+  respx-mocked); optional later to raise the real rate limit.
+- `TURSO_DATABASE_URL`/`TURSO_AUTH_TOKEN` — not needed until Task 5A;
+  local SQLite in use until then.
+
+**`design/` folder:** a Claude Design component prototype was added and
+reconciled into BuildPlan.md's Task 4A section (see there for the full
+keep/discard breakdown — short version: keep `LLPaperCard`'s
+drag-to-decide gesture math as the reference for the swipe gesture,
+discard its playback engine and state management entirely since
+stricter tested equivalents already exist).
