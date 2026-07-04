@@ -70,6 +70,28 @@ class PubMedUnavailableError(PubMedError):
     """
 
 
+class PubMedParseError(PubMedError):
+    """EFetch returned a well-formed HTTP response, but this module could
+    not extract *any* usable article from it, despite the response
+    containing (or being expected to contain) actual `<PubmedArticle>`
+    data — i.e. a likely bug in `_parse_one_article`/`_parse_efetch_xml`
+    (e.g. an NCBI XML schema change), not a genuinely nonexistent PMID.
+
+    Deliberately distinct from an *individual* malformed record within an
+    otherwise-successful batch (§7.9 — one bad record is still logged and
+    skipped, the batch's other results are still returned normally) and
+    from `PubMedUnavailableError` (a reachability/rate-limit problem, not
+    a parsing one). Callers (Tier 3's route handlers) are expected to map
+    this onto CONTRACTS.md's `internal_error` (500) rather than treating
+    an empty result as an ordinary "PMID not found" (404) — collapsing
+    the two would silently hide a systemic backend bug (e.g. every EFetch
+    call failing to parse after an upstream schema change) behind
+    unremarkable-looking 404 traffic that no 404-tolerant monitoring
+    would ever flag. Raised, and logged at ERROR (not WARNING) by the
+    caller, precisely because this case deserves to be noticed.
+    """
+
+
 # --------------------------------------------------------------------------
 # Clock abstraction — lets tests drive pacing/backoff without real sleeps.
 # --------------------------------------------------------------------------
@@ -357,6 +379,11 @@ class PubMedClient:
 
         Per §7.9, a PMID present in `pmids` but missing/malformed in the
         response is skipped, not treated as a fatal error for the batch.
+
+        Raises `PubMedParseError` (distinct from returning `[]`) if the
+        response contained article data that entirely failed to parse —
+        see that exception's docstring for why this must not be confused
+        with a genuinely empty/not-found result.
         """
         if not pmids:
             return []
@@ -416,24 +443,65 @@ _RETRACTED_MARKERS = ("retracted", "retraction")
 
 
 def _parse_efetch_xml(xml_text: str) -> list[EFetchArticle]:
-    articles: list[EFetchArticle] = []
+    """Parse EFetch's XML body into `EFetchArticle`s.
+
+    Distinguishes two very different "we ended up with nothing" outcomes
+    (see `PubMedParseError`'s docstring):
+    - The response genuinely contains zero `<PubmedArticle>` elements
+      (PubMed's own way of saying "no such PMID(s)") -> returns `[]`
+      normally; this is a legitimate not-found case for the caller to
+      surface as such.
+    - The response contains one or more `<PubmedArticle>` elements but
+      *every single one* threw while parsing (or the whole document
+      failed to parse as XML at all) -> raises `PubMedParseError`,
+      because that pattern means our parser is broken against real data,
+      not that PubMed has no data for us.
+
+    A genuinely mixed batch (some elements parse, some don't) still just
+    skips the bad ones and returns the good ones per §7.9 — only a
+    *complete* parse failure against non-empty input is treated as
+    systemic.
+    """
     try:
         root = ET.fromstring(xml_text)
     except ET.ParseError as exc:
-        logger.warning("EFetch: could not parse response XML: %s", exc)
-        return articles
+        logger.error("EFetch: could not parse response XML at all: %s", exc)
+        raise PubMedParseError("EFetch response was not valid XML.") from exc
 
-    for article_el in root.findall("PubmedArticle"):
+    article_elements = root.findall("PubmedArticle")
+    articles: list[EFetchArticle] = []
+    failed_count = 0
+    for article_el in article_elements:
         try:
             parsed = _parse_one_article(article_el)
         except Exception as exc:  # noqa: BLE001 — deliberately broad: one
-            # malformed record (§7.9) must not take down the whole batch.
+            # malformed record (§7.9) must not take down the whole batch;
+            # whether this is systemic is decided after the loop below.
             pmid_el = article_el.find(".//PMID")
             pmid_text = pmid_el.text if pmid_el is not None else "<unknown>"
             logger.warning("EFetch: skipping malformed record for PMID %s: %s", pmid_text, exc)
+            failed_count += 1
             continue
         if parsed is not None:
             articles.append(parsed)
+        else:
+            failed_count += 1
+
+    if article_elements and not articles:
+        # Every element present failed to parse — a likely schema-drift
+        # bug, not "PubMed has nothing for these PMIDs" (that case has
+        # zero `article_elements` in the first place, handled above by
+        # simply returning `[]`).
+        logger.error(
+            "EFetch: all %d article element(s) in a non-empty response failed to parse "
+            "(%d failures) — treating as a systemic parsing bug, not a not-found result.",
+            len(article_elements),
+            failed_count,
+        )
+        raise PubMedParseError(
+            f"EFetch returned {len(article_elements)} article(s) but none could be parsed."
+        )
+
     return articles
 
 

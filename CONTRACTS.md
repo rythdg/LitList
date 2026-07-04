@@ -273,7 +273,63 @@ interface ZoteroPushResponse {
 
 ---
 
+## 4. Simple success responses (no body)
+
+A handful of state-changing endpoints have nothing meaningful to return on
+success — e.g. `DELETE /api/v1/zotero/connection` (SPEC.md §9.6/§10.4's
+"Disconnect Zotero" action, pinned by Task 3B after this gap was flagged
+during Tier 2). These return **`204 No Content`, empty body**, rather than
+`{}` or `{"success": true}` — one convention project-wide for "the action
+happened, there's nothing to hand back." The frontend's shared `apiFetch`
+(Task 2A, `frontend/src/api/client.ts`) already special-cases `204` to
+resolve with `undefined` rather than attempting to parse a body, so this
+was a confirming addition, not a new frontend capability.
+
+Calling one of these endpoints when there is nothing to delete/act on
+(e.g. `DELETE /zotero/connection` with no `ZoteroConnection` row present)
+is **not** an error — still `204`, idempotently.
+
+---
+
+## 5. Queue/Saved item shape's `retracted` field
+
+`GET /api/v1/queue`, `POST /api/v1/search`, and `GET /api/v1/saved`
+(SPEC.md §10.4) each return a list of paper-in-context objects
+(`QueueItem` in `backend/app/routes/search.py`, `SavedItem` in
+`backend/app/routes/saved.py`) — these two shapes aren't otherwise pinned
+here since they're internal to this backend/frontend pair and not shared
+with a third integration the way the three shapes above are, but the
+field name below is pinned specifically because Task 4A (frontend core-
+loop wiring) needs to know it without guessing: both shapes carry a
+`retracted: bool` field, sourced from `Paper.retracted` (SPEC.md §13.4's
+"Retracted Publication" flag, extracted from EFetch's `PublicationType`
+list by Task 1B/persisted by Task 3A).
+
+**Important caveat for Task 4A:** `retracted` can only be accurate once
+`GET /api/v1/papers/{pmid}/abstract` has actually run EFetch for that
+PMID at least once (§7.1's two-stage fetch strategy — `POST /search`'s
+own `QueueItem`s are built from ESummary alone, which carries no
+`PublicationType` data). `retracted: false` on a freshly-searched queue
+item therefore means "not known to be retracted yet," not a confirmed
+guarantee — the same lazy-population caveat SPEC.md §7.6 already
+describes for `citation_count`. The frontend's "⚠ Retracted" badge
+(`StackScreen.tsx`) should treat this the same way it already treats a
+citation count that hasn't loaded yet: render nothing distinctive until
+the flag is confirmed `true`, never render a false "not retracted"
+assurance.
+
 ## Change log
 
 - **2026-07-04 — Task 0.2 (initial):** all three shapes above pinned by
   `senior-fullstack-developer`. No prior version existed to diverge from.
+- **2026-07-04 — Task 3B:** added §4 (simple 204 success-response
+  convention) and pinned `DELETE /api/v1/zotero/connection` in SPEC.md
+  §10.4 — the frontend's `useDisconnectZotero` hook already targeted this
+  endpoint (SPEC.md §9.6's "Disconnect Zotero" action) but neither
+  document listed it yet; implemented in `backend/app/routes/zotero.py`.
+- **2026-07-04 — Task 3A (post-verification fix):** added §5, pinning
+  `retracted: bool` on `QueueItem`/`SavedItem` — flagged by tester's
+  TASK 3A VERIFY as a real functional gap (SPEC.md §13.4's badge was
+  already built in the frontend against fixture data with no real
+  backend field to consume). Implemented in `backend/app/routes/
+  search.py`, `queue.py`, `saved.py`.

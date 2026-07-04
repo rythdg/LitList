@@ -1834,6 +1834,7 @@ OAuth provider's redirect alone to guarantee who's on the other end.
 | `GET /api/v1/zotero/collections` | List the connected user's collections (8.4) | 401-equivalent app error if no `ZoteroConnection` exists yet, which the frontend uses to trigger the "Connect to Zotero" step (5.5) |
 | `POST /api/v1/zotero/collections` | Create a new collection (8.5) | Body `{name}` |
 | `POST /api/v1/zotero/push` | Body `{collection_key, pmids: [...]}` | Batches into groups of 50 (8.6), writes `ZoteroExport` rows per success, returns a per-PMID success/failure list — never an all-or-nothing result, per 8.7 |
+| `DELETE /api/v1/zotero/connection` | The in-app "Disconnect Zotero" action (9.6, Saved List Panel 5.4) | Deletes the session's `ZoteroConnection` row immediately; idempotent (calling it with no connection present is not an error) — pinned here by Task 3B after this gap was flagged during Tier 2 (5.4/5.5's wireframes never named the concrete endpoint) |
 | `GET /api/v1/export.csv` | Streams the CSV export (8.8) | No Zotero dependency; works even without a `ZoteroConnection` |
 
 ### 10.5 Outbound rate-limit governance

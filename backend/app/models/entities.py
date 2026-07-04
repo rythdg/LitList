@@ -84,6 +84,17 @@ class SearchSession(SQLModel, table=True):
     default_swipe_behavior: SwipeBehavior = Field(default=SwipeBehavior.interested)
     speed: float = Field(default=1.0)
     updated_at: datetime = Field(default_factory=utcnow)
+    # --- Pagination bookkeeping (Task 3A, §7.9's "transparent follow-up
+    # ESearch page" requirement) — not in the original §9.2 table listing,
+    # added here because GET /queue needs to know (a) how many total PMIDs
+    # ESearch reported so it knows whether "running low" means "no more
+    # exist" vs "fetch the next page", and (b) what `retstart` to resume
+    # from. Kept on `SearchSession` since it's 1:1 with the query that
+    # produced these counts and is replaced/reset exactly when a new
+    # search replaces the old one (§3.5), same lifecycle as everything
+    # else on this row.
+    total_result_count: int | None = None
+    next_retstart: int = 0
 
 
 class Paper(SQLModel, table=True):
@@ -107,6 +118,27 @@ class Paper(SQLModel, table=True):
     citation_fetched_at: datetime | None = None
     esummary_fetched_at: datetime | None = None
     efetch_fetched_at: datetime | None = None
+    # --- Fields added by Task 3A, flagged as needed-but-not-yet-persisted
+    # in Task 1B's log and Task 1D's log respectively. Populated only once
+    # EFetch has actually run for this PMID (i.e. together with
+    # `efetch_fetched_at`) — null until then.
+    # §13.3: MEDLINE `Language` code, needed to recompute
+    # `narration_unavailable` (Task 1D's `is_narration_unavailable`)
+    # without re-fetching EFetch.
+    language: str | None = None
+    # §13.4: convenience flag from EFetch's PublicationType list.
+    retracted: bool = False
+    # Raw structured sections (§7.5's `AbstractText`/`Label` pairs) this
+    # paper's `display_abstract`/`spoken_abstract` were built from — kept
+    # so `GET /papers/{pmid}/abstract` can re-derive the full
+    # `SegmentedAbstractResponse` (CONTRACTS.md §1) from a cache hit alone,
+    # via Task 1D's `build_segmented_abstract`, without ever calling
+    # PubMed again (§9.2/§13.6: cached Paper rows keep serving regardless
+    # of PubMed being reachable). JSON list of `{"label": str|None,
+    # "text": str}`, one entry per original `AbstractText` element.
+    abstract_sections: list[dict[str, str | None]] | None = Field(
+        default=None, sa_column=Column(JSON)
+    )
 
 
 class DecisionState(StrEnum):

@@ -26,6 +26,7 @@ from app.integrations.pubmed import (
     BASE_URL,
     Clock,
     PubMedClient,
+    PubMedParseError,
     PubMedUnavailableError,
     RateLimiter,
 )
@@ -253,6 +254,77 @@ async def test_efetch_skips_malformed_record_without_failing_batch() -> None:
 
     assert len(articles) == 1
     assert articles[0].pmid == "12345678"
+
+
+@pytest.mark.asyncio
+async def test_efetch_zero_article_elements_is_a_legitimate_empty_result() -> None:
+    """A response with a well-formed but entirely empty `PubmedArticleSet`
+    (e.g. every requested PMID genuinely doesn't exist) must return `[]`
+    normally — not raise. This is the "PubMed has nothing for us" case
+    `PubMedParseError` is deliberately NOT meant to cover (adversarial
+    review, TASK 3A REVIEW finding #2)."""
+    xml_body = '<?xml version="1.0"?>\n<PubmedArticleSet></PubmedArticleSet>'
+    with respx.mock(assert_all_called=True) as mock:
+        mock.get(f"{BASE_URL}efetch.fcgi").mock(
+            return_value=httpx.Response(200, text=xml_body)
+        )
+        client = PubMedClient(clock=FakeClock().as_clock())
+        articles = await client.efetch(["00000000"])
+
+    assert articles == []
+
+
+@pytest.mark.asyncio
+async def test_efetch_raises_parse_error_when_every_article_fails_to_parse() -> None:
+    """Adversarial review (TASK 3A REVIEW finding #2): if EVERY
+    `<PubmedArticle>` element in a non-empty response fails to parse
+    (e.g. an NCBI XML schema change breaks `_parse_one_article`
+    entirely), that must be distinguishable from a genuine "PMID not
+    found" result — silently returning `[]` here would let a real,
+    systemic backend bug masquerade as ordinary 404 traffic. Both
+    elements below are missing `PMID` (the same condition
+    `_parse_one_article` already treats as unparseable) — with *no*
+    well-formed sibling this time, unlike
+    `test_efetch_skips_malformed_record_without_failing_batch` above."""
+    xml_body = """<?xml version="1.0"?>
+<PubmedArticleSet>
+  <PubmedArticle>
+    <MedlineCitation>
+      <Article>
+        <ArticleTitle>Missing PMID, should be skipped</ArticleTitle>
+      </Article>
+    </MedlineCitation>
+  </PubmedArticle>
+  <PubmedArticle>
+    <MedlineCitation>
+      <Article>
+        <ArticleTitle>Also missing PMID</ArticleTitle>
+      </Article>
+    </MedlineCitation>
+  </PubmedArticle>
+</PubmedArticleSet>"""
+    with respx.mock(assert_all_called=True) as mock:
+        mock.get(f"{BASE_URL}efetch.fcgi").mock(
+            return_value=httpx.Response(200, text=xml_body)
+        )
+        client = PubMedClient(clock=FakeClock().as_clock())
+        with pytest.raises(PubMedParseError):
+            await client.efetch(["11111111", "22222222"])
+
+
+@pytest.mark.asyncio
+async def test_efetch_raises_parse_error_on_whole_document_xml_parse_failure() -> None:
+    """A response body that isn't valid XML at all (e.g. NCBI serving an
+    HTML error page with a 200 status) must also raise `PubMedParseError`
+    rather than silently degrading to an empty, 404-indistinguishable
+    result."""
+    with respx.mock(assert_all_called=True) as mock:
+        mock.get(f"{BASE_URL}efetch.fcgi").mock(
+            return_value=httpx.Response(200, text="<not><valid xml")
+        )
+        client = PubMedClient(clock=FakeClock().as_clock())
+        with pytest.raises(PubMedParseError):
+            await client.efetch(["11111111"])
 
 
 # ---------------------------------------------------------------------------
