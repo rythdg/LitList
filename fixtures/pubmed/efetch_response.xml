@@ -1,0 +1,123 @@
+<?xml version="1.0" ?>
+<!--
+  Fixture note: shaped like NCBI EFetch's rettype=abstract&retmode=xml
+  response (SPEC.md §7.5). PMIDs match fixtures/pubmed/esearch_response.json
+  and esummary_response.json. Used by Task 1B's respx-mocked pubmed_client
+  tests and Task 1D's tokenizer/language-mismatch tests.
+
+  - 38279812: normal record, structured abstract (Background/Methods/
+    Results/Conclusions), English language, includes abbreviation-heavy
+    sentences (Fig., vs., et al.) deliberately overlapping
+    fixtures/tokenizer/abbreviation_corpus.json's edge cases.
+  - 38279813: marked "Retracted Publication" in PublicationTypeList
+    (SPEC.md §13.4's retracted-badge edge case). No DOI (matches
+    esummary_response.json's missing-DOI case).
+  - 37000001: Language "fre" (French) with no English abstract translation
+    (SPEC.md §13.3's language-mismatch edge case) — narration_unavailable
+    should be set true for this record against an English active voice.
+-->
+<PubmedArticleSet>
+  <PubmedArticle>
+    <MedlineCitation Status="MEDLINE" Owner="NLM">
+      <PMID Version="1">38279812</PMID>
+      <Article PubModel="Print">
+        <Journal>
+          <ISOAbbreviation>J Appl Clin Res</ISOAbbreviation>
+          <Title>Journal of Applied Clinical Research</Title>
+        </Journal>
+        <ArticleTitle>Effects of early intervention on outcomes in a mixed-methods cohort study</ArticleTitle>
+        <Abstract>
+          <AbstractText Label="BACKGROUND" NlmCategory="BACKGROUND">Results are shown in Fig. 2. Sample sizes varied widely across the six included cohorts.</AbstractText>
+          <AbstractText Label="METHODS" NlmCategory="METHODS">As shown by Smith et al. in a prior cohort, early intervention improved outcomes. Response rates were higher in the treatment arm vs. placebo.</AbstractText>
+          <AbstractText Label="RESULTS" NlmCategory="RESULTS">This difference was statistically significant (p &lt; 0.01). No serious adverse events were reported.</AbstractText>
+          <AbstractText Label="CONCLUSIONS" NlmCategory="CONCLUSIONS">Early intervention should be considered standard practice pending replication.</AbstractText>
+        </Abstract>
+        <AuthorList CompleteYN="Y">
+          <Author ValidYN="Y">
+            <LastName>Alvarez</LastName>
+            <ForeName>Sofia</ForeName>
+            <Initials>S</Initials>
+          </Author>
+          <Author ValidYN="Y">
+            <LastName>Chen</LastName>
+            <ForeName>Wei</ForeName>
+            <Initials>W</Initials>
+          </Author>
+        </AuthorList>
+        <Language>eng</Language>
+        <PublicationTypeList>
+          <PublicationType UI="D016428">Journal Article</PublicationType>
+        </PublicationTypeList>
+      </Article>
+    </MedlineCitation>
+    <PubmedData>
+      <ArticleIdList>
+        <ArticleId IdType="pubmed">38279812</ArticleId>
+        <ArticleId IdType="doi">10.1234/jacr.2024.001812</ArticleId>
+      </ArticleIdList>
+    </PubmedData>
+  </PubmedArticle>
+
+  <PubmedArticle>
+    <MedlineCitation Status="MEDLINE" Owner="NLM">
+      <PMID Version="1">38279813</PMID>
+      <Article PubModel="Print">
+        <Journal>
+          <ISOAbbreviation>Int Rev Med</ISOAbbreviation>
+          <Title>International Review of Medicine</Title>
+        </Journal>
+        <ArticleTitle>A retrospective analysis of adverse events (no DOI on record)</ArticleTitle>
+        <Abstract>
+          <AbstractText>This article has been retracted by the publisher. Findings should not be relied upon.</AbstractText>
+        </Abstract>
+        <AuthorList CompleteYN="Y">
+          <Author ValidYN="Y">
+            <LastName>Chen</LastName>
+            <ForeName>Li</ForeName>
+            <Initials>L</Initials>
+          </Author>
+        </AuthorList>
+        <Language>eng</Language>
+        <PublicationTypeList>
+          <PublicationType UI="D016441">Retracted Publication</PublicationType>
+          <PublicationType UI="D016428">Journal Article</PublicationType>
+        </PublicationTypeList>
+      </Article>
+    </MedlineCitation>
+    <PubmedData>
+      <ArticleIdList>
+        <ArticleId IdType="pubmed">38279813</ArticleId>
+      </ArticleIdList>
+    </PubmedData>
+  </PubmedArticle>
+
+  <PubmedArticle>
+    <MedlineCitation Status="MEDLINE" Owner="NLM">
+      <PMID Version="1">37000001</PMID>
+      <Article PubModel="Print">
+        <Journal>
+          <ISOAbbreviation>Legacy Med Bull</ISOAbbreviation>
+          <Title>Legacy Medical Bulletin</Title>
+        </Journal>
+        <ArticleTitle>Étude rétrospective d'une cohorte historique</ArticleTitle>
+        <Abstract>
+          <AbstractText>Cette étude rétrospective examine une cohorte historique sans traduction anglaise disponible.</AbstractText>
+        </Abstract>
+        <AuthorList CompleteYN="Y">
+          <Author ValidYN="Y">
+            <CollectiveName>Legacy Study Group</CollectiveName>
+          </Author>
+        </AuthorList>
+        <Language>fre</Language>
+        <PublicationTypeList>
+          <PublicationType UI="D016428">Journal Article</PublicationType>
+        </PublicationTypeList>
+      </Article>
+    </MedlineCitation>
+    <PubmedData>
+      <ArticleIdList>
+        <ArticleId IdType="pubmed">37000001</ArticleId>
+      </ArticleIdList>
+    </PubmedData>
+  </PubmedArticle>
+</PubmedArticleSet>

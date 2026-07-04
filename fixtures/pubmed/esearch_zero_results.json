@@ -1,0 +1,17 @@
+{
+  "_fixture_note": "Zero-result ESearch response (SPEC.md §7.9) — drives the empty-results state (§4.3/§5.3a) with no follow-up ESummary/EFetch calls.",
+  "header": {
+    "type": "esearch",
+    "version": "0.3"
+  },
+  "esearchresult": {
+    "count": "0",
+    "retmax": "0",
+    "retstart": "0",
+    "querykey": "1",
+    "webenv": "MCID_000000000000000000000001",
+    "idlist": [],
+    "translationset": [],
+    "querytranslation": "(a deliberately over-specific query[All Fields])"
+  }
+}

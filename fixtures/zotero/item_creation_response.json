@@ -1,0 +1,36 @@
+{
+  "_fixture_note": "Shaped like the Zotero Web API v3's batched item-creation response (SPEC.md §8.6, via pyzotero's zot.create_items([...])) — a per-index success/failure/unchanged map, which is exactly the source data Task 1C/3B must translate into CONTRACTS.md's per-PMID ZoteroPushResult shape. Index 0 succeeds; index 1 fails (used to exercise the partial-batch-failure path, §8.7/§9.2's ZoteroExport tracking). Used by Task 1C's mocked zotero client tests and Task 2C's MSW handlers.",
+  "successful": {
+    "0": {
+      "key": "XJ2K9F3P",
+      "version": 101,
+      "library": {"type": "user", "id": 123456, "name": "My Library"},
+      "data": {
+        "key": "XJ2K9F3P",
+        "version": 101,
+        "itemType": "journalArticle",
+        "title": "Effects of early intervention on outcomes in a mixed-methods cohort study",
+        "creators": [
+          {"creatorType": "author", "firstName": "Sofia", "lastName": "Alvarez"},
+          {"creatorType": "author", "firstName": "Wei", "lastName": "Chen"}
+        ],
+        "abstractNote": "Background. Results are shown in Fig. 2. ...",
+        "publicationTitle": "Journal of Applied Clinical Research",
+        "date": "2024 Feb",
+        "DOI": "10.1234/jacr.2024.001812",
+        "url": "https://doi.org/10.1234/jacr.2024.001812",
+        "libraryCatalog": "PubMed",
+        "extra": "PMID: 38279812",
+        "collections": ["ABCD1234"]
+      }
+    }
+  },
+  "success": {"0": "XJ2K9F3P"},
+  "unchanged": {},
+  "failed": {
+    "1": {
+      "code": 503,
+      "message": "Service unavailable, retry after some time"
+    }
+  }
+}

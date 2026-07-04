@@ -1,0 +1,15 @@
+{
+  "_fixture_note": "Shaped like the NIH iCite API's batch response (SPEC.md §7.6). PMID 37000001 is deliberately absent from `data` to exercise the 'not all PMIDs are covered' nullable-citation-count case (§9.2's Paper.citation_count note). Used by Task 1B's respx-mocked iCite client tests, including the graceful-degradation-on-unreachable path (mocked as a connection error/5xx in the test itself, not representable as a fixture payload).",
+  "data": [
+    {
+      "pmid": 38279812,
+      "citation_count": 12,
+      "citations_per_year": {"2024": 12}
+    },
+    {
+      "pmid": 38279813,
+      "citation_count": 0,
+      "citations_per_year": {}
+    }
+  ]
+}

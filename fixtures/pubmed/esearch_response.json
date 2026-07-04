@@ -1,0 +1,17 @@
+{
+  "_fixture_note": "Shaped like NCBI ESearch's retmode=json response (SPEC.md §7.3). Used by Task 1B's respx-mocked pubmed_client tests — no real network calls. IDs here correspond 1:1 with fixtures/pubmed/esummary_response.json and efetch_response.xml.",
+  "header": {
+    "type": "esearch",
+    "version": "0.3"
+  },
+  "esearchresult": {
+    "count": "3",
+    "retmax": "3",
+    "retstart": "0",
+    "querykey": "1",
+    "webenv": "MCID_000000000000000000000000",
+    "idlist": ["38279812", "38279813", "37000001"],
+    "translationset": [],
+    "querytranslation": "(sample query[All Fields])"
+  }
+}

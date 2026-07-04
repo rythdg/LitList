@@ -129,3 +129,75 @@ procedure, any future change to this file must (1) be logged here with
 reason, (2) grep every build.log for citations of the changed shape, and
 (3) get a scoped fix task dispatched per affected already-merged
 consumer before that tier's exit gate closes.
+
+[2026-07-04T01:00:00] TASK 0.3 — START
+BuildPlan.md Tier 0, Task 0.3 (§6.5/§15.1/§15.9 abbreviation corpus;
+1B/1C's mocked-test raw PubMed/Zotero payloads; 2C's MSW mocks). Depends
+on 0.1 (dirs exist) and 0.2 (fixture shapes for anything derived, e.g.
+future segmented-abstract fixtures 2D might add later) — both same
+session, no external log needed. Seam: `fixtures/` directory consumed
+later by 1D's tokenizer tests, 2D's playback-engine tests (same
+sentence corpus, so both sides cover the same edge cases instead of
+picking their own), 1B/1C's respx-mocked PubMed/Zotero client tests, and
+2C's MSW handlers. Building: an abbreviation-heavy sentence corpus
+(Fig./vs./et al./e.g., plus a couple of extra tricky real-world cases)
+as a small structured JSON (sentences + expected split points, so it
+doubles as a golden-file fixture, not just raw prose), 2-3 realistic
+PubMed ESummary/EFetch-shaped payloads (per §7.4/§7.5's documented
+fields), and one Zotero collections-list + one item-creation response
+shape (per §8.4/§8.6 pyzotero-shaped payloads).
+
+[2026-07-04T01:20:00] TASK 0.3 — COMPLETE
+Did: created `fixtures/` at repo root with three subdirs: `tokenizer/`
+(one golden-file JSON, `abbreviation_corpus.json`, 11 cases pairing
+`raw_text` with the correct abbreviation-aware `expected_sentences`
+split — covers Fig./vs./et al./e.g./i.e./Dr./approx./species
+abbreviations (E. coli)/decimal numbers, plus two baseline no-
+abbreviation cases so an over-fitted tokenizer that under-splits also
+fails, and one deliberate "et al. at a true sentence end" hard case),
+`pubmed/` (esearch_response.json + esearch_zero_results.json per §7.3/
+§7.9, esummary_response.json per §7.4 with one missing-DOI record for
+§13.4, efetch_response.xml per §7.5 with one structured abstract reusing
+the tokenizer corpus's own tricky sentences, one Retracted-Publication-
+flagged record for §13.4's badge case, one French-language record with
+no English translation for §13.3's language-mismatch case, and
+icite_response.json per §7.6 with one PMID deliberately absent to
+exercise the nullable-citation-count path), and `zotero/`
+(collections_response.json per §8.4, item_creation_response.json per
+§8.6 with one successful + one failed item to exercise §8.7's partial-
+batch-failure path). Added `fixtures/README.md` indexing what's here and
+which later task consumes each file, so 1B/1C/1D/2C/2D don't have to
+reverse-engineer the fixture set's intent from the raw payloads alone.
+All PMIDs (38279812/38279813/37000001) are cross-consistent across the
+three PubMed fixture files so a test can chain ESearch->ESummary->EFetch
+against one fake queue.
+Worked: validated every JSON fixture parses (`json.load` on all 7 files
+— all OK) and the EFetch XML fixture parses via
+`xml.etree.ElementTree` — 3 `PubmedArticle` entries found, PMIDs/
+Language/PublicationType fields extracted correctly (38279812/eng/
+[Journal Article], 38279813/eng/[Retracted Publication, Journal
+Article], 37000001/fre/[Journal Article]) confirming the fixture is
+well-formed and the retracted/language-mismatch signals are present
+where intended. No consuming test suite exists yet (that's 1B/1C/1D/2C/
+2D's job in Tiers 1-2) — this task's own gate is "fixtures committed and
+well-formed," which is met.
+Changed: `fixtures/README.md`, `fixtures/tokenizer/
+abbreviation_corpus.json`, `fixtures/pubmed/{esearch_response,
+esearch_zero_results,esummary_response,icite_response}.json`,
+`fixtures/pubmed/efetch_response.xml`, `fixtures/zotero/
+{collections_response,item_creation_response}.json`.
+Open: none for this task.
+
+[2026-07-04T01:25:00] TIER 0 — EXIT GATE MET (from this agent's side)
+All three Tier 0 tasks complete and committed to `main`: 0.1
+(scaffolding — both apps boot, backend pytest/ruff/mypy and frontend
+eslint/tsc/vitest all green), 0.2 (`CONTRACTS.md` committed), 0.3
+(`fixtures/` committed, validated well-formed). Per BuildPlan.md's
+validation-checkpoint pattern, `tester` should still independently
+verify 0.1's boot claims and 0.3's fixture coverage before the
+orchestrator declares Tier 1/2/5 unblocked — this agent's own COMPLETE
+entries are not a substitute for that per the "no entry, no merge" rule.
+No blockers from this agent's side. Flagging one open item for the
+human/orchestrator: the stray `litlist/` venv at repo root was left in
+place (not deleted, per instructions) and is now gitignored — safe to
+delete manually whenever convenient, it plays no role in the monorepo.

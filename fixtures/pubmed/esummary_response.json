@@ -1,0 +1,47 @@
+{
+  "_fixture_note": "Shaped like NCBI ESummary's retmode=json response (SPEC.md §7.4). PMID 38279812 is a normal well-formed record; 38279813 deliberately has no DOI in articleids (§13.4's missing-DOI edge case); 37000001 is deliberately older/sparser to exercise a second missing-field pattern. Used by Task 1B's respx-mocked tests.",
+  "header": {
+    "type": "esummary",
+    "version": "0.3"
+  },
+  "result": {
+    "uids": ["38279812", "38279813", "37000001"],
+    "38279812": {
+      "uid": "38279812",
+      "title": "Effects of early intervention on outcomes in a mixed-methods cohort study",
+      "lastauthor": "Alvarez S",
+      "fulljournalname": "Journal of Applied Clinical Research",
+      "source": "J Appl Clin Res",
+      "pubdate": "2024 Feb",
+      "sortpubdate": "2024/02/01 00:00",
+      "articleids": [
+        {"idtype": "pubmed", "idtypen": 1, "value": "38279812"},
+        {"idtype": "doi", "idtypen": 3, "value": "10.1234/jacr.2024.001812"}
+      ]
+    },
+    "38279813": {
+      "uid": "38279813",
+      "title": "A retrospective analysis of adverse events (no DOI on record)",
+      "lastauthor": "Chen L",
+      "fulljournalname": "International Review of Medicine",
+      "source": "Int Rev Med",
+      "pubdate": "2023 Nov",
+      "sortpubdate": "2023/11/15 00:00",
+      "articleids": [
+        {"idtype": "pubmed", "idtypen": 1, "value": "38279813"}
+      ]
+    },
+    "37000001": {
+      "uid": "37000001",
+      "title": "Older record with sparse metadata",
+      "lastauthor": "",
+      "fulljournalname": "Legacy Medical Bulletin",
+      "source": "Legacy Med Bull",
+      "pubdate": "1998",
+      "sortpubdate": "1998/01/01 00:00",
+      "articleids": [
+        {"idtype": "pubmed", "idtypen": 1, "value": "37000001"}
+      ]
+    }
+  }
+}

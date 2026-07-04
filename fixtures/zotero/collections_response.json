@@ -1,0 +1,29 @@
+{
+  "_fixture_note": "Shaped like pyzotero's Zotero(...).collections() return value against the Zotero Web API v3 collections endpoint (SPEC.md §8.4) — a list of collection objects, each carrying the `key` used to file items into it (§8.6) and `data.name` shown in the Screen D1 radio list (§5.5). Used by Task 1C's mocked zotero client tests and Task 2C's MSW handlers.",
+  "collections": [
+    {
+      "key": "ABCD1234",
+      "version": 42,
+      "library": {"type": "user", "id": 123456, "name": "My Library"},
+      "data": {
+        "key": "ABCD1234",
+        "version": 42,
+        "name": "Journal Club",
+        "parentCollection": false,
+        "relations": {}
+      }
+    },
+    {
+      "key": "WXYZ5678",
+      "version": 17,
+      "library": {"type": "user", "id": 123456, "name": "My Library"},
+      "data": {
+        "key": "WXYZ5678",
+        "version": 17,
+        "name": "To Read",
+        "parentCollection": false,
+        "relations": {}
+      }
+    }
+  ]
+}

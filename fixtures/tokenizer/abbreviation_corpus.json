@@ -1,0 +1,105 @@
+{
+  "description": "Golden-file sentence-tokenizer corpus (BuildPlan.md Task 0.3; SPEC.md §6.5, §15.1, §15.9). Shared verbatim by the backend tokenizer's tests (Task 1D, backend/app/text/tokenize.py) and the frontend playback engine's tests (Task 2D) so both sides cover the same edge cases instead of independently guessing which abbreviations matter. Each case's `raw_text` is a stand-in for one paper's display_abstract (pre-normalization); `expected_sentences` is the correct abbreviation-aware split — a naive `'. '.split()` tokenizer will produce a different (wrong) count/boundaries for every case except `baseline_no_abbreviations` and `baseline_two_short_sentences`.",
+  "cases": [
+    {
+      "id": "figure_reference",
+      "note": "'Fig. 2' must not be treated as a sentence boundary.",
+      "raw_text": "Results are shown in Fig. 2. Sample sizes varied widely across the six included cohorts.",
+      "expected_sentences": [
+        "Results are shown in Fig. 2.",
+        "Sample sizes varied widely across the six included cohorts."
+      ]
+    },
+    {
+      "id": "versus_abbreviation",
+      "note": "'vs.' inside a comparison must not be treated as a sentence boundary.",
+      "raw_text": "Response rates were higher in the treatment arm vs. placebo. This difference was statistically significant (p < 0.01).",
+      "expected_sentences": [
+        "Response rates were higher in the treatment arm vs. placebo.",
+        "This difference was statistically significant (p < 0.01)."
+      ]
+    },
+    {
+      "id": "et_al_citation",
+      "note": "'et al.' followed immediately by a lowercase continuation must not split, even though the following word starts a new clause.",
+      "raw_text": "As shown by Smith et al. in a prior cohort, early intervention improved outcomes. No such effect was observed here.",
+      "expected_sentences": [
+        "As shown by Smith et al. in a prior cohort, early intervention improved outcomes.",
+        "No such effect was observed here."
+      ]
+    },
+    {
+      "id": "eg_and_ie_abbreviations",
+      "note": "Both 'e.g.' and 'i.e.' appear in the same sentence and must not split it.",
+      "raw_text": "Several comorbidities, e.g. diabetes and hypertension, i.e. the most common in this cohort, were controlled for in the regression model. Age was also included as a covariate.",
+      "expected_sentences": [
+        "Several comorbidities, e.g. diabetes and hypertension, i.e. the most common in this cohort, were controlled for in the regression model.",
+        "Age was also included as a covariate."
+      ]
+    },
+    {
+      "id": "species_abbreviation",
+      "note": "Genus abbreviation ('E. coli') is a classic false sentence-boundary trap distinct from the generic abbreviation list.",
+      "raw_text": "Cultures were grown from E. coli isolates collected at three sites. Growth was measured at 24 and 48 hours.",
+      "expected_sentences": [
+        "Cultures were grown from E. coli isolates collected at three sites.",
+        "Growth was measured at 24 and 48 hours."
+      ]
+    },
+    {
+      "id": "titles_and_approx",
+      "note": "'Dr.' as a title and 'approx.' as a measurement qualifier both appear; neither should split.",
+      "raw_text": "Dr. Alvarez led the trial, which enrolled approx. 200 participants across four sites. Recruitment took eighteen months.",
+      "expected_sentences": [
+        "Dr. Alvarez led the trial, which enrolled approx. 200 participants across four sites.",
+        "Recruitment took eighteen months."
+      ]
+    },
+    {
+      "id": "decimal_numbers_and_percentages",
+      "note": "Decimal points inside numbers (dosages, confidence intervals) must not be mistaken for sentence-ending periods.",
+      "raw_text": "The mean dose was 2.5 mg per kilogram, with a 95.5% confidence interval of 1.8 to 3.2. No serious adverse events were reported.",
+      "expected_sentences": [
+        "The mean dose was 2.5 mg per kilogram, with a 95.5% confidence interval of 1.8 to 3.2.",
+        "No serious adverse events were reported."
+      ]
+    },
+    {
+      "id": "multiple_abbreviations_one_sentence",
+      "note": "Stacks several abbreviation classes ('vs.', 'et al.', 'e.g.') inside a single sentence to check the tokenizer doesn't split on any of them.",
+      "raw_text": "Compared vs. the control group, and consistent with Lee et al., e.g. in similarly designed studies, the intervention group showed improved adherence. Follow-up continued for twelve months.",
+      "expected_sentences": [
+        "Compared vs. the control group, and consistent with Lee et al., e.g. in similarly designed studies, the intervention group showed improved adherence.",
+        "Follow-up continued for twelve months."
+      ]
+    },
+    {
+      "id": "abbreviation_at_true_sentence_end",
+      "note": "An abbreviation-like token ('et al.') that is followed by a genuinely new sentence (capitalized, unrelated clause) — the hard case: the tokenizer must still split here despite the trailing period belonging to a known abbreviation, because this is also where the sentence actually ends.",
+      "raw_text": "This finding replicates the results of Chen et al. The mechanism, however, remains unclear.",
+      "expected_sentences": [
+        "This finding replicates the results of Chen et al.",
+        "The mechanism, however, remains unclear."
+      ]
+    },
+    {
+      "id": "baseline_no_abbreviations",
+      "note": "Baseline control case: no abbreviations at all. A correct tokenizer must not under-split here either.",
+      "raw_text": "Twenty-two patients completed the full protocol. Three withdrew due to unrelated scheduling conflicts. No adverse events were attributed to the study drug.",
+      "expected_sentences": [
+        "Twenty-two patients completed the full protocol.",
+        "Three withdrew due to unrelated scheduling conflicts.",
+        "No adverse events were attributed to the study drug."
+      ]
+    },
+    {
+      "id": "baseline_two_short_sentences",
+      "note": "Minimal two-sentence baseline, no tricky punctuation.",
+      "raw_text": "The study was terminated early. Enrollment targets were not met.",
+      "expected_sentences": [
+        "The study was terminated early.",
+        "Enrollment targets were not met."
+      ]
+    }
+  ]
+}
