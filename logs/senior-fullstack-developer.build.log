@@ -74,3 +74,58 @@ that's the current ESLint default and ships cleanly with
 Open: none for this task. Real route modules, models, and PWA
 config land in Tier 1/2/3 per BuildPlan; this task's scope was
 scaffolding only.
+
+[2026-07-04T00:35:00] TASK 0.2 — START
+BuildPlan.md Tier 0, Task 0.2 (§6.5/§10.4 segmented-abstract shape,
+§10.3 error shape incl. §13.6's service_unavailable, §8.6/8.7 Zotero
+push per-item response shape). Depends on Task 0.1 only (just-completed,
+same session, no external log to read). Seam: this is the contract
+document itself — `/CONTRACTS.md` at repo root — that Tasks 1D+2D
+(segmented abstract), 3A/3B/3D+2C/4A/4C (error shape), and 1C/3B+2B/4B
+(Zotero push shape) will all consume. Writing field names/types + one
+example JSON per shape now, pinning several naming choices SPEC.md
+states behaviorally but doesn't literally name as JSON keys (documented
+inline in CONTRACTS.md itself, e.g. `sentence_text`/`char_start`/
+`char_end`/`section_label`/`pause_class`/`narration_unavailable`).
+
+[2026-07-04T00:50:00] TASK 0.2 — COMPLETE
+Did: wrote `/CONTRACTS.md` at repo root pinning three shapes: (1) the
+segmented-abstract response for `GET /api/v1/papers/{pmid}/abstract` —
+a single ordered `segments[]` array (not separate display/spoken lists)
+where each segment carries `index` (the §6.5 sync signal the playback
+engine keys highlighting off), `kind` (`section_header`|`sentence`),
+`section_label`, `display_text`/`spoken_text`, `char_start`/`char_end`
+(§6.5's displayCharRange), and `pause_class` (`structural`|`sentence`,
+§6.4); (2) the API error shape `{"error":{"code","message"}}` (§10.3)
+with a pinned-but-extensible table of known `code` values including
+`service_unavailable` (§13.6) and `rate_limited` (§10.5, deliberately
+distinct codes since one is external-dependency downtime and the other
+is LitList's own inbound throttling); (3) the Zotero push per-item shape
+for `POST /api/v1/zotero/push` (§8.6/8.7) — a `results[]` array of
+per-PMID `{pmid, status, zotero_item_key?, error?}`, explicitly never an
+all-or-nothing response, with `error` reusing the pinned error shape's
+inner object.
+Decision calls made (SPEC.md states behavior, not literal JSON field
+names, so these were mine to pin — reasoning inline in CONTRACTS.md
+too): (a) one unified `segments[]` array rather than parallel
+display/spoken arrays, because §6.5's sync mechanism is explicitly
+index-based ("the currently-playing utterance's index tells the UI
+exactly which sentence to highlight") — a single array makes that
+literal; (b) section headers modeled as their own `segment` with
+`kind: "section_header"` rather than folded into the following
+sentence's text, since §7.5 describes them as spoken as their own short
+utterance before their section, i.e. their own pause/utterance boundary;
+(c) `rate_limited` (429, caller-side) kept as a separate code from
+`service_unavailable` (503, external-dependency-side) since §13.6
+explicitly distinguishes these as different problems needing different
+user-facing copy, and Task 4C's job is to keep that distinction visible.
+Worked: this is a contracts document, not code — no test suite of its
+own; its "test" is that Tier 1 (1D)/Tier 2 (2D)/Tier 3 (3A/3B/3D)/
+Tier 4 (4A/4B/4C) all build against it without needing to invent or
+renegotiate a shape, which later tiers will confirm.
+Changed: `CONTRACTS.md` (new file, repo root).
+Open: none. Flagging for the orchestrator: per BuildPlan.md's standing
+procedure, any future change to this file must (1) be logged here with
+reason, (2) grep every build.log for citations of the changed shape, and
+(3) get a scoped fix task dispatched per affected already-merged
+consumer before that tier's exit gate closes.
