@@ -1066,3 +1066,265 @@ app/integrations/pubmed.py (Task 1B) or to Task 3D as a candidate for
 distinguishing "empty parse result" from "genuine not-found" (e.g. via a
 distinct internal signal/log level) so it doesn't silently hide behind a
 404.
+
+[2026-07-04T17:30:00] TASK 3D REVIEW — START
+Reviewing Task 3D (cross-cutting middleware: backend/app/middleware/errors.py,
+ratelimit.py, security.py, main.py wiring, session.py's /health exemption)
+against BuildPlan.md lines 553-576 and SPEC.md §10.3/§10.5/§10.7, independently
+of senior-backend-developer's COMPLETE/PIVOT entries and tester's TASK 3D
+VERIFY/RE-VERIFY (both claimed "checkpoint MET", no blocking findings). Read
+all three middleware files, main.py's wiring, session.py in full, and ran
+empirical repros (not just code review) for: rate-limiter session-churn
+bypass, streaming-response mid-generator exceptions, Pydantic response-model
+serialization failures, and CORS origin-string matching against
+subdomain/query-string trick variants.
+
+[2026-07-04T17:55:00] TASK 3D REVIEW — PIVOT
+tester's TASK 3D VERIFY item 3 claims "IP fallback key verified directly."
+Read test_middleware_ratelimit.py::test_ip_fallback_key_used_when_no_session_resolved
+and found it calls `session_or_ip_key()` directly against a synthetic
+Starlette `Request` built from a raw scope that never sets
+`request.state.session` at all — not an integration test through the real
+middleware stack. The test's own docstring admits "in this app's real
+wiring, SessionIdentityMiddleware always resolves a session ahead of the
+rate limiter, so the fallback branch is otherwise dead code in an
+integration test." That sentence is the tell: it means the per-IP backstop
+§10.5 explicitly requires ("Fix: per-session_id (and, as a backstop,
+per-IP) request throttling") is never exercised end-to-end, only as an
+isolated unit call. This redirected the review toward the real question:
+what happens to an attacker who never returns/persists the session
+cookie at all, since every real request always resolves *some* session and
+the IP-fallback branch is provably unreachable in the live stack. Wrote a
+standalone repro (30 requests, each via a fresh, cookie-less TestClient
+instance, against a rate-limited /search route capped at 10/minute) —
+confirmed all 30 returned 200, zero requests were throttled. Root cause:
+`session_or_ip_key` keys strictly off `request.state.session.session_id`,
+and `SessionIdentityMiddleware` transparently mints a brand-new `Session`
+DB row + session_id for any request with no valid cookie — so a client
+that simply never sends the cookie back gets a fresh rate-limit bucket
+key on every single request, and the per-session counter never
+accumulates past 1.
+
+[2026-07-04T18:15:00] TASK 3D REVIEW — COMPLETE
+
+Findings, most severe first:
+
+1. BLOCKING — Per-session inbound rate limiter (backend/app/middleware/
+   ratelimit.py) is completely and trivially bypassable by never
+   persisting/returning the session cookie; the §10.5-mandated per-IP
+   backstop is dead code in the real wiring, not a functioning defense.
+   Verified empirically: a script issuing `POST /search` from a fresh,
+   cookie-less client each time (functionally equivalent to any HTTP
+   client that doesn't use a cookie jar, or that discards Set-Cookie) hit
+   30/30 requests with 200s against a route capped at 10/minute — the
+   limiter never engaged once. Cause: `session_or_ip_key()` reads
+   `request.state.session.session_id`, and `SessionIdentityMiddleware`
+   (wired ahead of the rate limiter, per main.py's own documented order)
+   unconditionally mints a brand-new `Session` row + session_id whenever
+   no valid cookie is presented — so a cookie-churning caller gets a
+   fresh rate-limit bucket key on every request, and the per-IP fallback
+   (`get_remote_address`) is only reached if `request.state.session` is
+   entirely unset, which never happens in the live stack (session
+   middleware always runs first and always resolves *a* session). This
+   directly defeats SPEC.md §10.5's explicit purpose for the limiter
+   ("Shared-budget exhaustion" and "Using LitList as a free,
+   unauthenticated PubMed/Zotero-writing proxy") — an attacker script
+   hitting `/search`, `/zotero/push`, `/export.csv`, or
+   `/papers/{pmid}/abstract` directly, bypassing the UI, faces
+   effectively zero throttling. It also causes unbounded `Session` table
+   growth (a new DB row per abusive request, no cap), a secondary
+   DB-bloat/DoS angle. tester's TASK 3D VERIFY item 3 ("IP fallback key
+   verified directly") tested only the unit function `session_or_ip_key()`
+   in isolation with a synthetic request that never had a resolved
+   session — not the actual attack surface (a live request through the
+   full stack that never returns a cookie) — so this gap survived both
+   the specialist's own tests and tester's two verification passes.
+   Reported back for a real per-IP (or per-IP+route) ceiling that applies
+   independently of session churn, e.g. always also charging an IP-keyed
+   budget regardless of whether a session was freshly minted this
+   request, or capping how many new `Session` rows a single IP may create
+   per minute.
+
+2. SIGNIFICANT — A generator-based streaming response that raises after
+   its headers have already been flushed (e.g. `GET /export.csv`'s row
+   iterator hitting a DB error partway through the Saved List) is not
+   converted to CONTRACTS.md §2's safe error shape, contradicting
+   errors.py's own docstring claim that this covers "any unhandled
+   exception... regardless of exception type." Verified empirically with
+   a minimal repro (a `StreamingResponse` generator that yields two rows
+   then raises `RuntimeError`, run through the real
+   `install_exception_handlers`): the client receives HTTP 200 with a
+   truncated/empty body, not a 500 with the pinned JSON error body — once
+   `http.response.start` has been sent with a 200 status, that status
+   cannot be retroactively changed, so the exception handler's JSON
+   response can never actually reach the client for this failure mode.
+   No secret currently leaks through this specific path (export.csv's
+   fields are already-sanitized local DB data, not raw exception text),
+   so this is not a live credential-leak repeat of the Tier 1 pattern,
+   but it is a real, verified gap in the "every response gets the safe
+   shape" guarantee, and it produces a user-visible failure that's
+   indistinguishable from "the Saved List happens to be empty" (a
+   silently truncated/incomplete CSV posing as a successful export)
+   rather than a detectable error. Neither tester's VERIFY nor RE-VERIFY
+   entries exercised a streaming route under a mid-generator failure —
+   both rounds tested only non-streaming routes and mid-*middleware*
+   exceptions. Reported back so export.csv's generator can either wrap
+   its DB iteration in a way that emits a detectable
+   truncation/sentinel, or the row query can run to completion before
+   any bytes are streamed (trading the streaming memory benefit for
+   correctness) if partial-failure detection matters for this data.
+
+3. Non-finding (verified, does not hold up) — Pydantic/FastAPI
+   response-model serialization failures. Tested directly: a route
+   returning data that fails its declared `response_model` type raises
+   `fastapi.exceptions.ResponseValidationError` *before* any bytes are
+   sent (`serialize_response` runs ahead of `response(scope, receive,
+   send)`), so it is caught by the same global `Exception` handler and
+   correctly returns the safe 500 body. This concern from the review
+   brief does not reproduce as a gap.
+
+4. Non-finding (verified) — CORS/CSRF real-world bypass attempts.
+   `_allowed_origins()`/`CSRFGuardMiddleware` use exact string equality
+   (`origin not in _allowed_origins()`), which correctly rejects both a
+   query-string trick (`https://evil.com?real-origin=https://
+   localhost:5173`) and a subdomain trick (`https://localhost.5173.evil.
+   com`) — neither string-equals a configured origin. The "no Origin
+   header → allowed" default is a deliberate, documented fail-open
+   choice; verified it doesn't reopen classic CSRF because every
+   body-bearing state-changing endpoint still requires
+   `Content-Type: application/json`, which an HTML `<form>` (the classic
+   CSRF delivery mechanism) cannot produce regardless of Origin — so the
+   two checks are complementary, not one masking a gap in the other.
+   Security headers are confirmed applied to every response including
+   403/429/500 paths (`SecurityHeadersMiddleware` is the outermost layer
+   in main.py's wiring, verified against the actual `add_middleware` call
+   order). Route-level exception handling in 3A/3B/3C (`except ApiError`,
+   `except PubMedParseError`, etc.) is all internal try/except that
+   returns directly — none of it relies on FastAPI's
+   `@app.exception_handler` MRO resolution, so there is no
+   shadowing/interference risk with Task 3D's global handlers. No finding
+   in any of these four areas.
+
+Reported findings 1 (BLOCKING) and 2 (SIGNIFICANT) back to
+senior-backend-developer/orchestrator; findings 3-4 explicitly recorded as
+"tried to refute, could not" rather than omitted, per adversarial-review
+convention.
+
+[2026-07-04T19:15:00] TASK 3D BLOCKING-FIX RE-REVIEW — START
+Independently re-attacking the rate-limiter session-churn bypass
+(originally found in "TASK 3D REVIEW") against senior-backend-developer's
+IP-primary/session-secondary redesign (PIVOT entry in
+logs/senior-backend-developer.build.log, most recent) and tester's
+"TASK 3D BLOCKING-FIX VERIFY" re-verification, per §10.5. Not trusting
+either report at face value — reading backend/app/middleware/ratelimit.py
+directly, reproducing the original attack myself against the real
+app.main.app (not just re-running the existing test suite), and
+separately probing for a header-spoofing bypass of the new IP key and a
+path-normalization bypass of the route-matching table.
+
+[2026-07-04T19:45:00] TASK 3D BLOCKING-FIX RE-REVIEW — COMPLETE
+
+1. Read backend/app/middleware/ratelimit.py directly (lines 87-243).
+   Confirmed the design as described: `_ip_key` calls slowapi's
+   `get_remote_address(request)` unconditionally as the primary,
+   always-checked key; `_session_key` returns `None` (not a substitute
+   identity) when unresolved and is only consulted secondarily.
+   `InboundRateLimitMiddleware.__call__` checks the IP bucket first
+   (lines 224-230) and rejects immediately if over threshold, before
+   ever looking at the session key — matches the claimed hierarchy, not
+   just in the docstring but in the actual control flow.
+
+2. Independently reproduced my original attack against the real
+   `app.main.app` (not the test harness) with a standalone script: 65
+   requests to `GET /api/v1/export.csv` (IP cap 60/minute), each from a
+   brand-new, cookie-less `TestClient` instance (fresh session every
+   time, exactly the original attack shape). Result: first 60 requests
+   200, remaining 5 correctly 429 — confirmed by direct observation, not
+   by trusting the existing test file. The limiter now genuinely
+   engages against the exact original bypass. Also ran `pytest`/`ruff`/
+   `mypy --strict` myself and got 212 passed / clean / clean, matching
+   tester's numbers exactly (not just taking the reported counts on
+   faith).
+
+3. New-bypass attempts on the fixed design, both failed to find
+   anything:
+   - Read slowapi's actual installed source
+   (`backend/.venv/lib/python3.12/site-packages/slowapi/util.py`).
+     `get_remote_address` (what `_ip_key` calls) only reads
+     `request.client.host` and never consults any header — X-Forwarded-
+     For is read by a *different* slowapi helper (`get_ipaddr`) that
+     this codebase does not use. Grepped the whole backend for
+     `ProxyHeaders`/`X-Forwarded`/`trust` — the only hits are
+     ratelimit.py's own docstring caveat; nothing in `app/main.py` or
+     uvicorn startup configures proxy-header trust. Empirically
+     confirmed by sending 65 requests each carrying a distinct spoofed
+     `X-Forwarded-For` header: the limiter's log key stayed
+     `ip:testclient` on every single request (unaffected by the
+     header), and the same 60-then-429 pattern occurred identically —
+     the header-spoofing bypass I was asked to check for does not work
+     against this code as written, because the code never reads that
+     header at all, correctly, not silently.
+   - Tried a path-normalization bypass (`/api/v1/export.csv/` trailing
+     slash, uppercase path, double-slash) against the route-matching
+     table's exact-string comparison (`suffix == table_path`, no
+     normalization). With `follow_redirects=False`, the trailing-slash
+     variant does dodge the string match and returns a bare 307 with no
+     body — but it never reaches the route handler (Starlette's
+     built-in `redirect_slashes` intercepts before routing), so it does
+     not execute the underlying business logic, hit the DB, or leak
+     data; it's an inert redirect response. With `follow_redirects=True`
+     (what any real client, browser or otherwise, does by default), the
+     redirect lands back on the canonical path and is correctly rate-
+     limited (60 then 429 again). Not a real bypass — flagging only
+     that the route table's string match is unnormalized, in case a
+     future route ever returns a real 200 body without a redirect on a
+     slash variant; not true today.
+   - Noted (not a bypass, an existing/pre-acknowledged deployment
+     caveat, unchanged from what the module's own docstring already
+     states at lines 95-103): `_ip_key` has no proxy-header awareness at
+     all, which is correct for direct-to-Render deployment but means
+     that if this backend is ever placed behind a real reverse proxy
+     without explicit trusted-proxy configuration, `request.client.host`
+     would show the proxy's IP for every request, collapsing all real
+     users into one shared IP bucket (an availability/false-positive
+     risk under real traffic, not a security bypass). This is already
+     flagged honestly in the code as a future TODO, not something I'm
+     asked to gate on now, but worth carrying forward if/when Render's
+     actual network topology in front of this app is confirmed one way
+     or the other.
+
+4. Read `app/middleware/errors.py`'s corrected docstring and
+   `app/routes/export.py`'s new try/except (lines 178-198) directly.
+   The docstring accurately describes an unfixable limitation (a
+   `StreamingResponse`'s status/header/partial-body bytes are already
+   flushed by the time a mid-generator exception occurs, so there is no
+   response left to reshape into CONTRACTS.md §2's safe JSON shape) and
+   does not claim this is resolved — it states plainly that the client
+   still just sees a truncated file. `export.py`'s wrapper only adds
+   `logger.exception` server-side (with session_id context) and
+   unconditionally re-raises; it does not swallow the exception, and it
+   does not write any exception detail into the CSV stream itself
+   (checked the code directly — the `except` block only logs and
+   re-raises, nothing is `yield`ed from it). This is an honest,
+   accurately-scoped treatment: documentation + logging, explicitly
+   presented as a known accepted gap rather than dressed up as fixed.
+
+VERDICT: The original BLOCKING finding (session-churn rate-limiter
+bypass) is genuinely CLOSED, verified independently against the live
+code and a fresh attack script, not by trusting tester's or
+senior-backend-developer's reports. No new bypass found despite
+specifically probing the two most likely candidates (X-Forwarded-For
+header spoofing of the IP key, and path-normalization evasion of the
+route-matching table) — both were tested empirically and neither
+produces unlimited requests against a real client flow. The streaming-
+exception item is honestly represented as an accepted, non-blocking
+limitation, not oversold as fixed.
+
+Tier 3 (Wave 1 + Wave 2) is CLEAR TO CLOSE from my perspective. Only a
+minor, non-actionable-today note carried forward: the route-matching
+table's exact string comparison doesn't normalize trailing slashes
+(currently harmless because Starlette's redirect intercepts before the
+handler runs) and the IP key's proxy-header blindness is correct for
+today's direct-to-Render deployment but will need revisiting the moment
+a reverse proxy sits in front of this backend — both already
+self-disclosed in the code's own docstrings, not new information.

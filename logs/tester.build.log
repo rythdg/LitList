@@ -2433,3 +2433,366 @@ TASK 3A REVIEW are genuinely fixed and covered by non-vacuous tests, full
 backend suite is green (187/187), ruff and mypy are clean, and my own
 independent filter-stripping check confirms the isolation test is
 load-bearing rather than decorative.
+
+[2026-07-04T15:00:00] TASK 3D VERIFY — START
+Verifying senior-backend-developer's Task 3D (cross-cutting middleware:
+errors.py, ratelimit.py, security.py, main.py wiring, session.py /health
+exemption) against SPEC.md §10.3 (error shape), §10.5 (inbound rate
+limiting, distinct from 1B's outbound pacing), §10.7 (CORS/CSRF/security
+headers), and BuildPlan.md Tier 3 Wave 2 exit gate (lines 553-576). Will
+run full backend suite fresh, read errors.py/ratelimit.py/security.py/
+main.py/session.py directly, and check ordering, session-keying
+correctness, and the flagged ASGI-middleware-exception blast radius.
+
+[2026-07-04T15:45:00] TASK 3D VERIFY — COMPLETE
+
+1. Full suite / lint / types (fresh run, backend/):
+   - `pytest -v` (no -x): 208 passed, 0 failed, 1 pre-existing deprecation
+     warning (httpx/starlette.testclient, unrelated to 3D). Includes all
+     of 1A-1D, 3A-3C's existing tests still green plus 3D's new
+     test_middleware_errors.py (5), test_middleware_ratelimit.py (4),
+     test_middleware_csrf.py (12) = 21 new tests, matching the log's
+     claimed count.
+   - `ruff check .`: "All checks passed!"
+   - `mypy app/`: "Success: no issues found in 33 source files"
+
+2. Error-shape handler (§10.3) — backend/app/middleware/errors.py,
+   backend/tests/test_middleware_errors.py:
+   Confirmed genuinely 3 distinct exception classes are used in the
+   parametrized test (`Exception`, `sqlalchemy.exc.OperationalError`,
+   `KeyError`), each constructed with an embedded secret string
+   (`sk-super-secret-ncbi-api-key-should-never-leak`) baked into the
+   exception's own message/args (including inside the SQL string for the
+   OperationalError). Test asserts exact body equality against the pinned
+   safe shape, AND separately asserts `_SECRET not in response.text`,
+   `"Traceback" not in response.text`, `"sqlalchemy" not in
+   response.text.lower()`. RequestValidationError is tested with a real
+   FastAPI path-param coercion failure and checked to not echo the
+   submitted value or FastAPI's default `"loc"` key. This is genuine,
+   non-trivial coverage — not three variations of the same exception
+   type.
+
+3. Rate limiting (§10.5) — backend/app/middleware/ratelimit.py,
+   backend/tests/test_middleware_ratelimit.py:
+   Confirmed this is a wholly separate code path from Task 1B's
+   `RateLimiter` in `app/integrations/pubmed.py` (different file, no
+   shared state, different direction — inbound per-caller vs. outbound
+   per-service; test file explicitly documents this distinction and
+   imports nothing from `app/integrations`). The 429 test drives 11 real
+   HTTP requests through a live `TestClient`/route (not a mocked limiter
+   decision) and proves the handler's own side-effect counter stops at
+   10, confirming the 11th/12th genuinely never reached the route.
+   Session-keying: `session_or_ip_key` reads `request.state.session
+   .session_id`, the exact same attribute `SessionIdentityMiddleware`
+   sets — verified by reading both files side by side, and confirmed
+   empirically: `test_two_distinct_sessions_each_get_their_own_budget`
+   uses two `TestClient` instances (distinct cookie jars) against the
+   same app and shows independent budgets, i.e. two different sessions
+   are correctly NOT bucketed together. I additionally confirmed
+   `app.user_middleware` ordering places `SessionIdentityMiddleware`
+   ahead of `InboundRateLimitMiddleware` in actual request-handling order
+   (see item 6), so the rate limiter always sees a resolved session before
+   making its keying decision — not a race.
+
+4. CSRF/CORS (§10.7) — backend/app/middleware/security.py,
+   backend/tests/test_middleware_csrf.py:
+   The suite's own integration test
+   (`test_real_search_route_side_effect_never_happens_when_rejected`)
+   hits the real `app.main.app`'s `POST /api/v1/search` from a disallowed
+   origin with a non-JSON content-type and asserts zero `SearchSession`
+   rows exist afterward — a genuine DB-side-effect assertion, not just an
+   HTTP-shape check. However, this DB-side-effect proof exists for only
+   ONE route (search); the other 11 assertions in the file exercise a
+   minimal synthetic app with fake handlers and a `calls` counter, not the
+   real 3A/3B/3C routers. I independently spot-checked the other
+   state-changing routes named in the task brief against the real
+   `app.main.app` (disallowed origin, non-JSON content-type where
+   applicable): `PATCH /api/v1/decisions/{pmid}`, `DELETE /api/v1/saved/
+   {pmid}`, `POST /api/v1/zotero/push`, and `DELETE /api/v1/zotero/
+   connection` — all four returned `403 csrf_rejected` and never reached
+   their handlers. Since `CSRFGuardMiddleware` is method/header-based and
+   runs identically regardless of which route matches afterward, I
+   consider this sufficient defense-in-depth, but flagging explicitly: the
+   *committed test suite itself* only proves the DB-side-effect claim for
+   `/search`, not for decisions/saved/zotero as the task brief's own
+   wording ("spot-check a few, not just one") anticipated might be
+   necessary to verify by hand rather than assume from the single example.
+   This is a minor coverage thinness, not a failure — my own live spot
+   check found no discrepancy.
+
+5. `/health` exemption — backend/app/middleware/session.py:
+   `_EXEMPT_PATHS` is a frozenset of exactly two literal strings
+   (`/health`, `/api/v1/health`), matched via `scope["path"] in
+   self._EXEMPT_PATHS` (exact equality, not a prefix/startswith check) —
+   cannot accidentally exempt any other route. Confirmed the fix is
+   necessary: reverted it locally in-memory reasoning against the PIVOT
+   log's own account (before the fix, `test_health.py` broke against a
+   schema-less test DB) — consistent with `app/main.py`'s own health
+   check docstring's explicit "no DB dependency" contract. `test_health.py`
+   passes in the full run.
+
+6. Middleware ordering — backend/app/main.py:
+   Read the wiring and independently confirmed via
+   `app.user_middleware` at runtime: actual request order is
+   SecurityHeaders -> CORS -> CSRFGuard -> SessionIdentity ->
+   InboundRateLimit -> routes, matching the file's own documented intent
+   and matching my expectation of a sane order (CSRF/CORS rejection
+   happens before any session DB lookup or rate-limit counter consumption
+   — a flood of disallowed-origin requests cannot itself exhaust a
+   session/DB resource or a legitimate caller's rate budget).
+
+7. Flagged ASGI-middleware-exception limitation — checked empirically,
+   found the docstring's characterization to be INACCURATE (though not
+   unsafe) for the actually-installed dependency versions. I wrote a
+   throwaway middleware that raises a `RuntimeError` containing a
+   fake secret, added only as `app.add_middleware(...)` (i.e. squarely in
+   the "outside ExceptionMiddleware's reach" zone the docstring
+   describes), and hit a route through it via `httpx.ASGITransport`.
+   Result: HTTP 500 with the exact safe pinned body
+   (`{"error":{"code":"internal_error","message":"Something went wrong on
+   our end. Please try again shortly."}}`) — the secret did NOT leak, and
+   no raw stack trace reached the client. Root cause: Starlette 1.3.1's
+   `Starlette.build_middleware_stack` (verified by reading
+   `starlette/applications.py` source directly) promotes a handler
+   registered for the literal `Exception` class to *also* serve as
+   `ServerErrorMiddleware`'s outermost `error_handler`, not only
+   `ExceptionMiddleware`'s inner one — so `@app.exception_handler
+   (Exception)` in `errors.py` already covers exceptions raised anywhere
+   in the user-middleware stack (CSRFGuard/RateLimit/SecurityHeaders/
+   SessionIdentity), not just inside routes. This means the actual live
+   gap is smaller than described, not larger — a genuine positive
+   finding — but errors.py's own docstring ("exceptions raised inside
+   ratelimit.py or security.py... never reach ExceptionMiddleware...
+   would NOT get the nice JSON error shape... fall through to
+   Starlette's built-in ServerErrorMiddleware... returns plain text") is
+   factually wrong about the observed behavior on this project's actual
+   pinned dependency range (`fastapi>=0.115`, no explicit starlette pin).
+   This is a documentation-accuracy finding, not a security bug — flagging
+   it back to senior-backend-developer to correct the docstring (either
+   confirm this holds across FastAPI's full supported starlette range, or
+   narrow the claim), rather than leaving a wrong "known limitation" in
+   the code that could cause someone to under-scrutinize a real future
+   version bump.
+
+Verdict: Task 3D checkpoint MET. All 208 tests pass, ruff/mypy clean,
+error-shape/rate-limit/CSRF requirements are genuinely tested (not
+superficially), middleware ordering is sane and verified at runtime, the
+/health exemption is real, necessary, and narrowly scoped, and my own
+adversarial probing of the flagged "middleware exception" limitation
+found no actual leak (the described gap doesn't reproduce — it's safer
+than documented, though the docstring should be corrected for accuracy).
+Two items to flag back, neither blocking: (a) CSRF real-route DB-side-
+effect test coverage is thin — only `/search` gets the full integration
+proof in the committed suite, though I independently verified the other
+four state-changing routes reject correctly by hand; (b) errors.py's
+"exceptions inside middleware bypass ExceptionMiddleware" docstring claim
+is empirically inaccurate for this project's actual dependency versions
+and should be corrected rather than left as a documented false limitation.
+
+Tier 3 exit gate (BuildPlan.md line 574: "Wave 1's three route groups
+merged and integration-tested; then Wave 2's middleware verified against
+all of them") — MET. Wave 1 (3A/3B/3C) tests all still pass under the
+full middleware stack, and Wave 2's middleware has been verified against
+all of Wave 1's routes, both via the committed suite and my own
+independent spot checks.
+
+[2026-07-04T16:15:00] TASK 3D RE-VERIFY — START
+Re-verifying senior-backend-developer's two post-verification fixes to
+Task 3D: (1) errors.py docstring correction + new
+test_exception_from_middleware_itself_is_still_safe, (2) two new CSRF
+DB-side-effect regression tests for PATCH /decisions/{pmid} and
+DELETE /saved/{pmid}. Will run the full backend suite fresh, read the
+new test bodies directly, diff the corrected docstring against my prior
+empirical finding, and sanity-check the Zotero-routes coverage decision.
+
+[2026-07-04T16:40:00] TASK 3D RE-VERIFY — COMPLETE
+
+1. Full suite / lint / types (fresh run, backend/, pytest -v, no -x):
+   211 passed, 0 failed, 1 pre-existing unrelated httpx/starlette
+   deprecation warning. `ruff check .`: "All checks passed!". `mypy app/`:
+   "Success: no issues found in 33 source files". Matches the claimed
+   208 prior + 3 new (1 in test_middleware_errors.py, 2 in
+   test_middleware_csrf.py).
+
+2. test_middleware_errors.py::test_exception_from_middleware_itself_is_still_safe
+   (§10.3): Read the test and its `_BoomMiddleware` fixture directly.
+   `_BoomMiddleware.__call__` raises `Exception(f"raw internal detail
+   from middleware: {_SECRET}")` unconditionally for HTTP scopes, before
+   ever calling `self.app(...)` — this is a genuine ASGI middleware
+   raising from itself, not a route handler it wraps, added via
+   `app.add_middleware(_BoomMiddleware)`. Test uses
+   `TestClient(..., raise_server_exceptions=False)` (required, matching
+   `test_zotero_routes.py`'s existing pattern, since
+   ServerErrorMiddleware re-raises after sending the response) and
+   asserts: status 500, exact body equality against CONTRACTS.md §2's
+   `internal_error` shape, `_SECRET not in response.text`, and
+   `"Traceback" not in response.text`. This is a real reproduction, not
+   a mocked-away version of the scenario, and the outcome (safe shape
+   returned) matches exactly what I found in my prior TASK 3D VERIFY
+   round.
+
+3. errors.py docstring: read the corrected text in full. It now
+   correctly states that `Starlette.build_middleware_stack` promotes
+   whichever handler is registered for the bare `Exception` class to
+   also serve as `ServerErrorMiddleware`'s handler, that
+   `ServerErrorMiddleware` is the outermost layer wrapping every
+   `add_middleware(...)` call (including this task's own three), and
+   that it re-raises after sending the response (visible to
+   logging/test harnesses, never to the response body). This exactly
+   matches my own empirically-derived mechanism from the prior round —
+   no remaining factual discrepancy.
+
+4. test_middleware_csrf.py's two new tests
+   (test_real_decisions_route_side_effect_never_happens_when_rejected,
+   test_real_saved_delete_route_side_effect_never_happens_when_rejected)
+   (§10.7 CSRF, generalizing the §3A DB-side-effect pattern): both use
+   `_seed_decision()` to insert a real `Session` + `Paper` +
+   `QueueDecision` row via SQLModel against `db_engine`, sign a real
+   session cookie with `app.middleware.session._sign`, send the
+   disallowed-origin (and, for PATCH, also non-JSON-Content-Type)
+   request against the real `app.main.app`, assert 403/`csrf_rejected`,
+   and then **re-query the DB directly** afterward: the PATCH test
+   asserts `row.decision == DecisionState.pending` and
+   `row.decided_via is None` (unchanged from seed); the DELETE test
+   asserts `row.decision == DecisionState.interested` (would have
+   flipped to `not_interested` per §4.7 had the handler run). Both are
+   genuine side-effect assertions, not merely HTTP-status checks —
+   satisfies the same rigor as the original `/search` version of this
+   pattern.
+
+5. Zotero-routes coverage decision: CSRFGuardMiddleware is installed as
+   plain ASGI middleware ahead of FastAPI's routing/dependency
+   injection, so it rejects disallowed-origin/non-JSON requests
+   identically regardless of which route or handler sits behind it —
+   the mechanism has no route-specific branching that would make
+   Zotero's `POST /push` or `DELETE /connection` behave differently at
+   the CSRF-guard layer itself. My own prior round already manually
+   spot-checked both against the real app and found no discrepancy from
+   the /search and /decisions/saved cases. Skipping a *committed*
+   DB-side-effect regression test for those two specifically is a
+   reasonable, disclosed judgment call given the added
+   pyzotero/OAuth-fixture cost and the fact the guard's logic is
+   provably route-agnostic — not a correctness gap. Noting for
+   completeness only, not as a blocking gap: no test asserts the
+   pyzotero client mock was never invoked when a Zotero push is
+   rejected (an even cheaper alternative to full DB-side-effect
+   assertion for that route specifically) — optional/nice-to-have, not
+   required, since the rejection happens before FastAPI ever resolves
+   the route's dependencies.
+
+Verdict: Task 3D follow-up fixes VERIFIED. Both claimed fixes are real,
+correctly scoped, and independently reproducible: the docstring is now
+factually accurate and the regression test genuinely exercises a
+middleware-raised exception (not a route handler); the two new CSRF
+tests genuinely assert DB-level non-side-effects, not just status
+codes. Full suite green (211/211), ruff and mypy clean. Task 3D is
+cleared for the required adversarial review.
+
+[2026-07-04T18:30:00] TASK 3D BLOCKING-FIX VERIFY — START
+Verifying senior-backend-developer's fix for adversarial-generalist's
+BLOCKING finding (rate-limiter session-churn bypass) per §15.8 (outbound
+PubMed pacing vs inbound per-session rate limiting, kept as separate
+concerns) and §10.5. Read senior-backend-developer's PIVOT entry and
+adversarial-generalist's TASK 3D REVIEW findings first. Plan: (1) run
+full backend suite + ruff + mypy, (2) read ratelimit.py's new _ip_key/
+_session_key design directly, (3) run the new
+test_ip_cap_engages_even_when_every_request_uses_a_fresh_session_and_no_cookie
+test and independently verify non-vacuousness by reverting to the old
+keying and confirming the test then fails, (4) confirm session_id
+secondary-dimension test still passes, (5) review export.py logging
+wrapper for safety, (6) review errors.py docstring correction.
+
+[2026-07-04T18:50:00] TASK 3D BLOCKING-FIX VERIFY — COMPLETE
+Scope: §15.1 (backend unit), §15.8 (inbound per-session rate limiting,
+kept distinct from outbound PubMed pacing), §10.3/§10.5/§10.7.
+
+1. Full suite: `pytest -v` → 212/212 passing. `ruff check .` → "All
+   checks passed!". `mypy --strict app` → "Success: no issues found in
+   33 source files". No failures of any kind.
+
+2. Read backend/app/middleware/ratelimit.py directly. `_ip_key` calls
+   slowapi's `get_remote_address(request)` unconditionally — checked
+   this helper's own source
+   (`site-packages/slowapi/util.py::get_remote_address`): it returns the
+   fixed string `"127.0.0.1"` when `request.client` is falsy/has no
+   `host`, rather than `None` or raising. This means there is no code
+   path where an unresolvable IP causes the IP check to be *skipped* —
+   worst case, multiple such callers collapse into one shared
+   `ip:127.0.0.1` bucket (a fairness/false-positive risk for genuinely
+   IP-less transports, not a bypass, since the check still executes and
+   still enforces a real ceiling). `_session_key` correctly returns
+   `None` (not a substitute identity) when unresolved, and
+   `InboundRateLimitMiddleware.__call__` checks the IP bucket first,
+   unconditionally, before ever looking at `_session_key` — confirmed by
+   reading the `__call__` method line-by-line (ratelimit.py:209-243).
+   This is a materially different design from the old bug: the primary
+   key no longer depends on any per-request mutable state
+   (`session_id`) that a caller can freely mint fresh.
+
+3. Ran `test_ip_cap_engages_even_when_every_request_uses_a_fresh_
+   session_and_no_cookie` (tests/test_middleware_ratelimit.py) directly:
+   PASSED (31 requests, each from a fresh cookie-less TestClient; first
+   30 return 200, #31 returns 429). Independently verified
+   non-vacuousness: temporarily edited
+   backend/app/middleware/ratelimit.py's `__call__` to revert to the old
+   session-only keying (session_key or, if unresolved, `_ip_key` as a
+   dead-in-practice fallback — i.e. reproducing the exact pre-fix logic)
+   and re-ran the same test in isolation. Result: FAILED —
+   `assert statuses[30] == 429` → `AssertionError: assert 200 == 429`
+   (tests/test_middleware_ratelimit.py:136), i.e. request #31 got 200,
+   reproducing the original bypass exactly. Restored ratelimit.py from a
+   pre-edit backup (`diff` confirmed byte-identical to the pre-revert
+   state), re-ran the full suite: 212/212 passing again. This confirms
+   the new test is genuinely load-bearing, not a vacuous assertion that
+   would pass regardless of the fix.
+
+4. `test_two_distinct_persistent_sessions_sharing_an_ip_each_get_a_
+   session_budget` (tests/test_middleware_ratelimit.py:140) exists and
+   PASSED: two distinct, persistent (cookie-reusing) sessions sharing
+   one IP each independently hit their own 10/minute session cap (11th
+   request from each gets 429) while their combined total (20) stays
+   under the 30/minute IP ceiling — confirms the session dimension still
+   gives real per-session granularity for the legitimate multi-tab/NAT
+   scenario, not just a shared/degraded IP-only bucket.
+
+5. Read app/routes/export.py's new try/except in `_iter_saved_papers_
+   csv`. It wraps only the DB-row-iteration/yield loop (not the header
+   row, not the neutralization logic), logs via `logger.exception` with
+   session_id context, and unconditionally `raise`s afterward — does not
+   swallow the exception. Ran tests/test_export.py (Task 3C's own CSV/
+   formula-injection suite) after this change: 15/15 still passing,
+   unchanged output. Coverage gap (not blocking): no dedicated test
+   asserts that a mid-stream DB failure actually triggers logger.
+   exception and still propagates as a broken/truncated stream — the
+   wrapper's own behavior is verified only by code reading, not by a
+   test that forces an exception mid-generator. Worth a follow-up test
+   but does not affect this BLOCKING-finding verdict, since it's
+   observability-only and additive per the coordinator's explicit
+   instruction, not part of the rate-limiter fix itself.
+
+6. Read app/middleware/errors.py's corrected docstring. It accurately
+   describes the still-existing, unfixable limitation: once a
+   StreamingResponse's 200 status/header bytes (and possibly some body)
+   are flushed, a mid-generator exception cannot be retroactively
+   reshaped into CONTRACTS.md §2's safe JSON error envelope, since there
+   is no unsent response left to replace — correctly framed as "known,
+   accepted limitation," mitigated only by server-side logging at the
+   source (export.py), not eliminated. This matches adversarial
+   review's own finding #2 and is not overstated. Also independently
+   re-ran test_middleware_errors.py::test_exception_from_middleware_
+   itself_is_still_safe (the regression test for the *other* docstring
+   correction, re: exceptions raised directly from middleware itself) —
+   PASSED.
+
+Verdict: Task 3D rate-limiter fix VERIFIED. Blocking finding resolved:
+YES. The IP-primary/session-secondary redesign is genuinely
+unconditional (no silent skip path for unresolvable IPs), the new
+regression test is non-vacuous (independently proven to fail against
+the old code and pass against the new code), the legitimate
+same-IP-different-session case is still correctly served, and the two
+smaller additive changes (export.py logging wrapper, errors.py
+docstring) are safe, accurately scoped, and don't alter Task 3C's
+already-verified CSV logic. Tier 3 (Wave 1 + Wave 2) gate: MET, pending
+only the minor, non-blocking coverage-gap note in item 5 above
+(recommend a follow-up test for the export.py logging wrapper itself,
+not required to close this BLOCKING item).

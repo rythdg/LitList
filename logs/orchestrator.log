@@ -161,3 +161,34 @@ final suite, ruff/mypy clean.
 Tier 3 Wave 1 (Tasks 3A, 3B, 3C) is now fully merged. Tier 3 Wave 2
 (Task 3D, cross-cutting middleware) is unblocked — its own test gate
 requires 3A/3B/3C's routes to exist, which they now do.
+
+[2026-07-04] Task 3D - MERGE CONFIRMED, Tier 3 FULLY CLOSED
+Task 3D's adversarial review found a real BLOCKING issue: the inbound
+rate limiter keyed strictly on session_id, but session middleware
+mints a fresh session for any cookie-less request, so the limiter
+never actually engaged for a caller that simply never sends a cookie -
+30 requests via 30 fresh clients all returned 200 against a 10/minute
+cap. This defeated Sec10.5's entire purpose and survived two rounds of
+tester verification, since those tests only exercised the fallback key
+function in isolation, never the live-stack attack path. Fixed by
+making IP (via slowapi's get_remote_address) the primary, unconditional
+key, with session_id demoted to a secondary dimension for finer-grained
+same-IP limiting. Both tester and adversarial-generalist independently
+re-attempted the exact original attack against the fix and confirmed
+it's closed - adversarial additionally tried and ruled out an
+X-Forwarded-For spoofing bypass (not trusted anywhere in the app) and
+a trailing-slash route-matching bypass (redirects to the canonical,
+rate-limited path). A second, non-blocking finding (streaming-response
+mid-generation exceptions can't be retroactively converted to a safe
+error shape once headers are flushed) was honestly documented as an
+accepted limitation rather than oversold as fixed, plus server-side
+logging was added so a real failure isn't silent.
+Two minor items carried forward, not blockers: the new IP-keying has
+no reverse-proxy/X-Forwarded-For awareness - correct for today's
+direct-to-host deployment but needs revisiting at Task 5A if a reverse
+proxy is introduced; and no test yet forces the export.py logging
+wrapper to actually fire on a real mid-stream exception (coverage gap,
+not a correctness gap).
+Tier 3 (Wave 1: 3A/3B/3C, Wave 2: 3D) is now FULLY CLOSED - every task
+independently verified by tester and adversarial-generalist, every
+real finding fixed and re-verified with revert-reproduce-restore rigor.
