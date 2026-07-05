@@ -201,3 +201,1206 @@ No blockers from this agent's side. Flagging one open item for the
 human/orchestrator: the stray `litlist/` venv at repo root was left in
 place (not deleted, per instructions) and is now gitignored — safe to
 delete manually whenever convenient, it plays no role in the monorepo.
+
+[2026-07-04T17:00:00] TASK 4C — START
+BuildPlan.md Tier 4, Task 4C (§11.7, §4.5, §13.6, plus §4.3/§4.4/§5.3a/
+§5.5/§10.2 for the specific copy contexts). Read both dependency logs
+first: senior-frontend-developer's log confirms Tier 2 (2A-2D) landed —
+`frontend/src/state/uiStore.ts` already has `isCookieNoticeDismissed`/
+`dismissCookieNotice` scaffolded (per this task's brief) but no visible
+banner component consumes it yet; `frontend/src/api/client.ts` (2C)
+already parses every non-2xx response into `ApiError{code,message}` per
+CONTRACTS.md §2; screens in `components/screens/` (2B) render Zotero
+push failure copy ad hoc/hardcoded (`ZoteroPushFlow.tsx`'s "failure"
+step) with no shared error component yet, and `SearchSettingsPanel.tsx`
+has no error-rendering path at all. senior-backend-developer's log
+confirms Tier 3 (3A/3B/3D) landed and `service_unavailable` (503) is a
+real, distinct code from `rate_limited` per CONTRACTS.md §2's table —
+no PIVOT in either log affects this task's shapes. Note: `App.tsx` is
+still Tier 0's placeholder — no real screen is wired/routed yet, and no
+Tier 4A/4B log entries exist yet in this session, so I'm building 4C's
+infrastructure as freestanding, well-tested units (Vitest/RTL + MSW)
+rather than a live end-to-end Playwright journey, since there is no real
+running app surface yet to drive one against; flagging this explicitly
+below rather than silently skipping the Playwright requirement.
+Seam: no CONTRACTS.md change anticipated (consuming §2's error shape,
+not extending it). Plan: `frontend/src/components/ErrorState.tsx` (new
+shared error-rendering component, copy switched by context + the
+offline/service_unavailable distinction), `frontend/src/state/
+networkStore.ts` + `retryQueueStore.ts` + `offlineSync.ts` (new —
+navigator.onLine detection, pending-action retry queue, auto-retry on
+`online` event), `frontend/src/components/CookieConsentNotice.tsx` (new,
+wires the already-scaffolded `uiStore` dismissal state to a visible
+banner). Will refactor `ZoteroPushFlow.tsx`'s failure-step rendering to
+consume the new shared component (copy-only change, preserving its
+existing test IDs/assertions) and add an optional `error`/`isOffline`
+prop to `SearchSettingsPanel.tsx` — both additive, not touching 4A's
+(StackScreen/decision wiring) or 4B's (OAuth/collection wiring) owned
+logic.
+
+[2026-07-05T00:00:00] TASK 4A — START
+BuildPlan.md Tier 4, Task 4A (§11.4 single decision function, §5.6
+one-ahead prefetch, §15.10 gesture testing). Depends on Tier 2 (frontend:
+2A/2B/2C/2D, all merged per senior-frontend-developer.build.log) and
+Tier 3 (backend: 3A/3B/3C/3D, all merged per senior-backend-developer.build.log,
+including 3A's several post-review PIVOTs — final route shapes as of
+"TASK 3A — PIVOT (post-adversarial-review fixes)" at 19:30 are what I'm
+wiring against, not the original 16:20 COMPLETE draft). Seam: frontend/
+src/api/*.ts (2C's TanStack Query hooks) <-> backend/app/routes/{search,
+queue,decisions,saved}.py (3A's real endpoints), plus frontend/src/
+components/screens/StackScreen.tsx (2B) <-> a new swipe-gesture layer
+(Framer Motion, not yet installed) per the design/ reference, plus 2D's
+usePlaybackEngine.ts <-> the real GET /papers/{pmid}/abstract response.
+No frontend/src/App.tsx wiring exists yet (still Tier 0's placeholder) —
+this task also has to write the first real App-level composition of
+IdleScreen/SearchSettingsPanel/StackScreen/SavedListPanel against
+Zustand + TanStack Query, which BuildPlan filed under this task's "App-
+level wiring" line.
+
+Before writing any code, diffed 2C's api/types.ts and 2B's screens/
+types.ts against the actual backend response models (search.py/queue.py/
+saved.py's QueueItem/QueueResponse/SavedItem, all merged and covered by
+187 backend tests) — found real, load-bearing shape drift on both
+frontend sides simultaneously, not just a wiring-time surprise. Detail
+in the PIVOT entry immediately below. Plan: fix the shape drift first
+(CONTRACTS.md + both type files + every consumer), then do the actual
+wiring (real endpoints, App.tsx, Framer Motion swipe gesture + single
+decision function, usePlaybackEngine hookup), then the three test tiers
+(backend already green/untouched, frontend unit tests, Playwright
+happy-path + drag-gesture + decision-function-equivalence).
+
+[2026-07-05T00:05:00] TASK 4A — PIVOT (contract drift found pre-wiring)
+CONTRACTS.md §5 (added by Task 3A) explicitly says the `/queue`/`/saved`
+response shapes "aren't otherwise pinned here... internal to this
+backend/frontend pair" and only formally pins the `retracted: bool`
+field name. In that gap, 2B (frontend/src/components/screens/types.ts)
+and 2C (frontend/src/api/types.ts) each independently invented their own
+shape, and *neither* matches what 3A actually shipped:
+- Both frontend sides modeled `QueueItem`/`SavedItem` as `{ paper: {...
+  nested object with a full authors[] array... }, decision, position }`.
+  The real backend (`search.py`/`queue.py`/`saved.py`'s `QueueItem`/
+  `SavedItem` Pydantic models) is flat — no nested `paper` object, and no
+  `authors` array at all (only a single pre-formatted `last_author:
+  string | null`, since PubMed's ESummary `LastAuthor` field already is
+  a formatted display string, e.g. "Chen W" — there's no backend-side
+  full-author-list source at the queue/saved layer, only at the
+  abstract-fetch layer per §7.1's two-stage strategy).
+- 2C's `QueuePaperSummary.last_author` was typed `string | null` (right
+  shape) but 2B's `screens/types.ts Paper.last_author` was typed
+  `Author | null` (an object with first_name/last_name) — the two
+  frontend-only type files disagreed with *each other*, not just with
+  the backend.
+- `QueueResponse` was missing the real `total_count` field (backend
+  returns it; frontend only modeled `has_more`).
+- `SavedItem` in the frontend assumed a `decided_at` field; the real
+  backend `SavedItem` has no such field (it returns `position` instead,
+  same as `QueueItem`).
+- 2B's `Paper.publication_types: string[]` + a frontend-side
+  `isRetracted()` string-matching helper predates 3A's later fix (see
+  CONTRACTS.md's own change log, "Task 3A post-verification fix") that
+  added a already-computed `retracted: bool` field specifically *because*
+  the frontend badge had no real backend field to consume yet — 2B was
+  never updated after that fix landed, so it's back to having no real
+  field to consume (the backend never sends `publication_types` in
+  `QueueItem`/`SavedItem` at all).
+- Separately, unrelated to the backend but still a wiring blocker: 2B's
+  `SearchSettings.read_aloud_fields` included a 4th `all_authors` toggle
+  with no backing field anywhere (SPEC.md §3.2.C and the backend's
+  `_VALID_READ_ALOUD_FIELDS` both cap this at exactly `{last_author,
+  journal, pub_date}`) — dropped as part of this fix rather than carried
+  forward as dead UI.
+
+Call: the backend shape is authoritative going forward — it's the
+already-tested, already-adversarially-reviewed side (187 backend tests,
+3 review rounds), and it satisfies everything SPEC.md §3.2.C/§13.4
+actually asks for (a formatted last-author string, a boolean retracted
+flag) without needing an unused full author list at the queue/saved
+layer. Fixing this required touching *both* previously-independent
+frontend type definitions plus every consumer (not the backend — no
+backend change needed here, the backend was already right). Formally
+pinning this in CONTRACTS.md now (expanding its existing §5) so this
+exact gap — "two sides guess independently because the contract
+document itself said 'not pinned yet'" — doesn't recur for whoever picks
+up `/zotero/collections` or any other still-unpinned shape later.
+
+[2026-07-05T00:10:00] TASK 4B — START
+BuildPlan.md Tier 4, Task 4B (§8, §5.5, §5.4, §9.6): Zotero export
+wiring, ties 2B's presentational push sub-flow/Saved List panel to 3B's
+real Zotero routes. Seam: frontend/src/api/zotero.ts (2C's hooks) <->
+backend/app/routes/zotero.py (3B), plus the OAuth redirect round-trip
+between backend/app/auth/oauth.py's `post_auth_redirect_url()` and
+frontend/src/routes/ZoteroCallbackRoute.tsx (2A's callback shell).
+Read both dependency logs before starting:
+- senior-backend-developer.build.log confirms 3B (zotero.py + oauth.py)
+  merged, 14/14 zotero-route tests green, plus a since-fixed atomicity
+  PIVOT in the callback handler (connection insert + session rotation
+  now one commit) — no open items affecting this task's wiring surface.
+- senior-frontend-developer.build.log (2A) flagged, in its own COMPLETE
+  entry, that ZoteroCallbackRoute.tsx's `?status=success` /
+  `?status=error&code=...&message=...` query-param shape was an
+  assumption made before 3B existed, to be "confirmed or corrected" by
+  whoever built the real backend redirect.
+- This session's own senior-fullstack-developer.build.log shows Task 4A
+  (concurrent, same agent role) already landed a real CONTRACTS.md §5
+  fix for the flat QueueItem/SavedItem shape — read the corrected
+  frontend/src/api/types.ts before writing any new consumer code so I
+  build against the real, current shape rather than a stale draft.
+  Also confirms Task 4C (concurrent) already added
+  frontend/src/state/networkStore.ts (real online/offline signal) and
+  ErrorState.tsx — I'll consume networkStore for ZoteroPushFlow's
+  `isOffline` prop rather than re-deriving connectivity myself, and
+  leave ErrorState/offline-retry-queue logic alone (4C's ownership).
+
+Checking the actual backend behavior before wiring (not just 2A's
+flagged assumption) found a real, unpinned contract mismatch — see the
+PIVOT entry immediately below.
+
+Plan: fix the OAuth-callback redirect contract (backend + frontend +
+CONTRACTS.md, in one piece of work per the project's standing rule);
+then build self-contained Zotero controller hooks/containers
+(frontend/src/features/zotero/) that supply real wiring for
+SavedListPanel's Zotero-specific props and ZoteroPushFlow's full prop
+set, without editing SavedListPanel.tsx/ZoteroPushFlow.tsx's own
+rendering (avoiding collision with 4A's/4C's concurrent edits to those
+same files) — App-level composition (mounting these into a real page)
+is explicitly 4A's "App-level wiring" scope per their own START entry
+above, so I'm handing off drop-in pieces rather than editing App.tsx
+myself. Tests: backend contract test (redirect shape), frontend
+unit/RTL+MSW tests for the controller hooks covering success/
+connection-failure/push-failure, Playwright test for the one piece that
+doesn't depend on 4A's still-in-progress App.tsx (the callback route
+itself, a real full-page-navigation surface already independent of App
+composition).
+
+[2026-07-05T00:20:00] TASK 4B — PIVOT (real OAuth-callback contract mismatch, not hypothetical)
+Confirmed by reading both sides' actual code (not just 2A's flagged
+assumption): this was a genuine two-sided divergence, not one side
+deviating from an agreed shape — CONTRACTS.md never pinned this
+redirect at all, so both 2A and 3B independently guessed and guessed
+differently.
+- Frontend (`frontend/src/routes/ZoteroCallbackRoute.tsx`/
+  `zoteroCallbackParams.ts`, Task 2A) expects the backend to redirect to
+  its one real URL-based route (`/oauth/zotero/callback`) with
+  `?status=success` or `?status=error&code=...&message=...`.
+- Backend (`backend/app/routes/zotero.py`/`app/config.py`, Task 3B) on
+  success redirected to `settings.zotero_post_auth_redirect_url`, whose
+  *default* value was the SPA's home path (`/`) with an unrelated
+  `?zotero=connected` param the frontend never parses — so a successful
+  connect would never even land on `ZoteroCallbackRoute.tsx`, just the
+  bare home screen with a param nobody reads. On failure
+  (`ZoteroSessionMismatchError`/`ZoteroOAuthProviderError` in
+  `auth_callback`, and `ZoteroOAuthProviderError` in `start_auth`), the
+  backend returned a raw `{"error": {code, message}}` JSON body directly
+  — but both of these routes are hit by a real browser navigation (the
+  "Connect to Zotero" button does a full navigation to `/auth/start`;
+  Zotero itself redirects the browser to `/auth/callback`), so a JSON
+  body renders as an unstyled dead end, not an in-app error screen.
+Resolution: backend was the side that needed to change — 2A's assumed
+shape is the more SPEC-aligned one (§8.2 step 6 explicitly calls for
+"bounces the browser to the fixed in-app post-auth path", and 2A had
+already flagged its assumption in-code for exactly this confirmation).
+Added `_callback_redirect()` in `backend/app/routes/zotero.py` (used by
+all three failure paths across `start_auth`/`auth_callback`, plus
+`auth_callback`'s success path) and changed
+`Settings.zotero_post_auth_redirect_url`'s default (`app/config.py`,
+`.env`, `.env.example`) to the frontend's real callback path. Pinned the
+final shape in CONTRACTS.md §6 so this exact "two sides guess
+independently, contract document stays silent" failure mode — the one
+Task 0.2 exists to prevent — doesn't recur for whoever wires the
+remaining still-unpinned `/zotero/collections` shape.
+
+[2026-07-05T01:10:00] TASK 4C — PIVOT (mid-task, concurrent-edit collision, not a contract bug)
+While finishing 4C, a concurrent Tier-4 pass (visible in this same log
+under "TASK 4A"/"TASK 4B" above, running in parallel this session) was
+actively reshaping `frontend/src/components/screens/types.ts` — flat
+`QueueItem`/`SavedItem`, and critically `SearchSettings.read_aloud_fields`
+changed from an object (`{last_author, all_authors, journal, pub_date}`)
+to a `ReadAloudField[]` array (CONTRACTS.md's `ReadAloudField` type,
+already used by `state/searchDraftStore.ts`). This broke my own earlier
+edit to `SearchSettingsPanel.tsx` (added there to render the new
+`ErrorState` for §4.3/§4.5): its checkbox bindings and
+`onReadAloudFieldToggle` prop signature still assumed the old object
+shape (`settings.read_aloud_fields.last_author`, `keyof
+SearchSettings["read_aloud_fields"]`), which `tsc -b --noEmit` caught
+immediately (12 errors) once 4A's `types.ts` change landed mid-session.
+This is not a CONTRACTS.md bug and not a case of me deviating from a
+pinned shape — `read_aloud_fields`'s array shape was never pinned by
+CONTRACTS.md in the first place (§5 only pins `retracted`); 4A's own log
+entry documents the array shape as the correct, already-decided fix
+(dropping the unused `all_authors` toggle) for a real, pre-existing
+drift between 2B/2C's independently-invented shapes. My file just hadn't
+been updated to match yet, since my edit predated 4A's landing it. Fixed
+by updating `SearchSettingsPanel.tsx`'s three remaining checkboxes to
+`settings.read_aloud_fields.includes(...)` and retyping
+`onReadAloudFieldToggle` as `(field: ReadAloudField) => void`, dropping
+the dead "All authors" checkbox — mechanical conformance to the
+already-agreed shape, no new design decision on my part. Separately
+(not mine to fix, left alone): at the same moment, `tsc`/`vitest` also
+showed real, live breakage in `StackScreen.tsx`/`SavedListPanel.tsx`
+(both consumers of the same `types.ts` change, mid-refactor under 4A) —
+confirmed via `git diff` that `SavedListPanel.tsx` had zero diff of its
+own (the break was 100% from the shared type changing under it, not
+from any edit of mine), and StackScreen.tsx's diff was 4A's own
+in-progress edit. Waited ~20s and re-ran `tsc -b --noEmit`/`vitest run`;
+4A's concurrent pass had completed its own fix to both files by then —
+full suite green again, and I did not touch either file.
+
+[2026-07-05T01:20:00] TASK 4C — COMPLETE
+Did (frontend-only per this task's scope — no backend or CONTRACTS.md
+change was needed, since this task consumes CONTRACTS.md §2's error
+shape rather than extending it):
+- `frontend/src/components/errorCopy.ts` (new): `getErrorCopy()`, the
+  single copy-resolution function behind every error surface in the
+  app. Priority order, matching this task's explicit brief: (1) client-
+  detected `isOffline` (§4.5) always wins, even over a `service_
+  unavailable` error, since an offline request may never have reached
+  the server; (2) `error.code === "service_unavailable"` (§13.6) gets
+  its own distinct "Temporarily unavailable" copy, never the offline
+  wording; (3) `zotero_push` context (§4.4/§5.5) distinguishes
+  `zotero_not_connected`/`zotero_session_mismatch` ("Couldn't connect")
+  from any other code ("Couldn't save"); (4) generic fallback (§4.3).
+- `frontend/src/components/ErrorState.tsx` (new): the shared error-
+  rendering component (§11.7) — one structure (role="alert", title,
+  message, optional Retry/Download-CSV buttons), copy supplied entirely
+  by `getErrorCopy`. Never invents its own error taxonomy — takes a raw
+  CONTRACTS.md §2 `ApiErrorBody` plus `isOffline`/`context`.
+- `frontend/src/state/networkStore.ts` (new): local-only (§11.2)
+  `isOnline` boolean, seeded from `navigator.onLine`, updated only by
+  real browser events — never by a `service_unavailable` response, per
+  this task's explicit warning against collapsing the two conditions.
+- `frontend/src/state/retryQueueStore.ts` (new): generic "pending — will
+  retry" queue (§4.5 point 4, §5.5) — `enqueue`/`remove`/`retryAll`
+  over an opaque `{id, label, run}`; failed items stay queued rather
+  than being dropped. Deliberately endpoint-agnostic — 4A/4B wire their
+  own real actions into it; this task builds the mechanism only.
+- `frontend/src/state/offlineSync.ts` (new): `initOfflineSync()` wires
+  `window`'s real `online`/`offline` events to the two stores above,
+  auto-draining the retry queue on reconnect. An explicit init function
+  (not a module-level side effect) so tests get isolated listeners.
+- `frontend/src/components/CookieConsentNotice.tsx` (new): renders the
+  §10.2-suggested copy verbatim, reading/writing the
+  `isCookieNoticeDismissed`/`dismissCookieNotice` state Task 2C already
+  scaffolded in `uiStore.ts` — purely a dismiss-once banner, not a
+  functionality gate, per §11.7.
+- Refactored `ZoteroPushFlow.tsx`'s Step 3b (failure) rendering to
+  consume `ErrorState` (context `zotero_push`) instead of its own
+  hardcoded copy strings — preserved its existing `data-testid`/button-
+  role contract so 2B's own test file needed no changes and still
+  passes unmodified. Added optional `error`/`isOffline`/`onRetry` props
+  to `SearchSettingsPanel.tsx` (§4.3/§4.5's search-failure/offline
+  surface), rendered via the same `ErrorState`; both are additive, kept
+  outside 4A's/4B's owned wiring.
+Worked (actual results):
+  - `npx tsc -b --noEmit` -> clean.
+  - `npx eslint . --max-warnings 0` -> clean.
+  - `npx vitest run` -> 28/28 files, 111/111 tests passing, including
+    all of this task's new suites: `errorCopy.test.ts` (6 tests, directly
+    asserting the §4.5-vs-§13.6 non-collapse and the zotero connection-
+    vs-push distinction), `ErrorState.test.tsx` (6), `ErrorState.
+    integration.test.tsx` (1 — see below), `networkStore.test.ts` (2),
+    `retryQueueStore.test.ts` (5), `offlineSync.test.ts` (4),
+    `CookieConsentNotice.test.tsx` (4). Pre-existing suites (`ZoteroPushFlow.
+    test.tsx`, `SearchSettingsPanel.test.tsx`) pass unmodified against the
+    refactored components.
+  - `ErrorState.integration.test.tsx` is this task's substitute for
+    "backend contract test + frontend unit test + integration test" on
+    the §13.6-vs-§4.5 distinction specifically: it runs a real
+    `useRunSearch()` mutation through the actual `apiFetch` HTTP
+    boundary (MSW-mocked `POST /search` returning a real 503
+    `{"error":{"code":"service_unavailable",...}}` body, CONTRACTS.md §2
+    shape, not a hand-built object), asserts the thrown `ApiError` has
+    `code === "service_unavailable"`, renders `ErrorState` with it, and
+    asserts both that the external-downtime copy shows *and* that
+    `networkStore.isOnline` is untouched (still `true`) — directly
+    covering this task's cited "mock a 3A service_unavailable response
+    ... app correctly still reports itself as online" requirement.
+  - `npm run build` -> succeeded (manifest/sw.js generated).
+Changed: `frontend/src/components/{ErrorState.tsx,ErrorState.test.tsx,
+ErrorState.integration.test.tsx,errorCopy.ts,errorCopy.test.ts,
+CookieConsentNotice.tsx,CookieConsentNotice.test.tsx,index.ts}` (all
+new), `frontend/src/state/{networkStore.ts,networkStore.test.ts,
+retryQueueStore.ts,retryQueueStore.test.ts,offlineSync.ts,
+offlineSync.test.ts}` (all new), `frontend/src/state/index.ts` (added
+exports), `frontend/src/components/screens/ZoteroPushFlow.tsx` (Step 3b
+refactor), `frontend/src/components/screens/SearchSettingsPanel.tsx`
+(added error/offline props + fixed the read_aloud_fields array-shape
+break described in the PIVOT entry above).
+Open / handed off:
+1. **Playwright network-offline emulation test (§15.6) not written.**
+   `@playwright/test` was added to `package.json` by the concurrent 4A/
+   4B work this session, but as of this entry there is still no
+   `playwright.config.ts`, no `e2e/` directory, and `App.tsx` is still
+   Tier 0's placeholder (no real screen is mounted/routed yet — 4A's own
+   log entries describe App-level composition as still in progress).
+   Writing a Playwright spec against selectors that aren't mounted
+   anywhere yet would be untestable today and likely to rot before 4A
+   lands; rather than duplicate/conflict with 4A's in-progress Playwright
+   setup (this task's own brief explicitly warns against that), I'm
+   flagging this as the one still-open piece of this task's test brief.
+   Recommend: once 4A's App.tsx composition + `playwright.config.ts` land,
+   add `e2e/offline.spec.ts` covering (a) cached-shell-loads-offline via
+   Playwright's `context.setOffline(true)` before navigation, (b) an
+   in-progress session (queue already loaded) continuing to render
+   without crashing once set offline mid-session, (c) a queued retry
+   action (e.g. a decision PATCH or Zotero push attempted offline)
+   actually firing once `setOffline(false)` is called — exercising the
+   real `retryQueueStore`/`offlineSync.ts` built in this task, not a
+   mock of them. The component/store level tests above already cover
+   the underlying logic in isolation (real `window` `online`/`offline`
+   events dispatched in `offlineSync.test.ts`); what's missing is
+   specifically the real-browser/service-worker angle Playwright adds.
+2. `retryQueueStore`/`offlineSync` are built but not yet wired to any
+   real action — by design, per this task's scope (4A owns the decision-
+   PATCH call site, 4B owns the Zotero push call site). Whoever finishes
+   those wiring passes should call `useRetryQueueStore.getState().
+   enqueue(...)` when their own mutation fails specifically because
+   `networkStore.isOnline` is false, and call `initOfflineSync()` once
+   from `main.tsx`/`App.tsx`'s top-level composition (not yet done by
+   anyone as of this entry — flagging since it's a one-line call that's
+   easy to forget: without it, `networkStore`/`retryQueueStore` exist
+   but nothing ever updates or drains them).
+3. `CookieConsentNotice` is built and tested but not yet mounted into
+   `App.tsx` — that's 4A's App-level composition to add (a one-line
+   `<CookieConsentNotice />` near the app root), flagged here so it
+   isn't lost once that composition lands.
+
+[2026-07-05T21:00:00] TASK 4C — PIVOT (post-adversarial-review fix)
+Adversarial review (logs/adversarial-generalist.build.log, "TASK 4C
+REVIEW") found no blocking issues and confirmed the offline-vs-service-
+down priority logic, retry-queue dedup/no-drop-under-flapping behavior,
+and CookieConsentNotice's intentional session-only persistence all held
+up under real attempts to break them. One real, SIGNIFICANT gap: §5.3a's
+empty-results screen (`EmptyQueueState.tsx`) never actually consumed the
+shared `ErrorState`/`errorCopy.ts` component — it had its own fully
+hardcoded copy ("No papers matched...", "Swipe down to try a different
+search."). BuildPlan.md's Task 4C line explicitly names §5.3a as one of
+the contexts this shared component was meant to specialize copy for
+(BuildPlan.md:634), so this was a real architecture-consistency gap
+against this task's own stated design, not merely a missing test as an
+earlier tester pass had framed it — correctly re-framed by the reviewer.
+Current visible copy was correct; the risk was purely that a future
+change to `ErrorState`'s markup/a11y pattern/copy-resolution logic
+wouldn't propagate here since it was never wired through in the first
+place.
+
+Fix: added a fourth `ErrorContext`, `"empty_results"` (§5.3a/§4.3), to
+`errorCopy.ts` — takes an optional `query` param (only meaningful for
+this context) and returns "No papers matched" / `"<query>".`, still
+routed through the same `isOffline` > `service_unavailable` > context
+priority chain as every other context (defensive consistency, even
+though offline doesn't really arise here since the screen only appears
+after a search already completed with zero hits). Added a `retryLabel`
+override prop to `ErrorState` so a context can use action wording other
+than the generic "Retry"/"Retry now" (§5.3a's specific "Swipe down to
+try a different search." affordance is structurally the same one-button
+retry action as every other context, just worded differently — keeps
+"specialized only by copy, not structure" intact rather than adding a
+one-off escape hatch). Rewrote `EmptyQueueState.tsx` to render its copy
+via `<ErrorState context="empty_results" query={query} onRetry=
+{onOpenSearch} retryLabel="Swipe down to try a different search." />`,
+keeping its own decorative "(no results)" label and the disabled play
+button as screen-specific chrome outside `ErrorState`'s scope. Its
+existing test file needed zero changes (same testids/roles/copy
+substrings) — confirms this was a pure internal-wiring fix, not a
+copy or behavior change.
+
+Also found and fixed one unrelated, incidental integration-seam bug
+while re-verifying: a concurrent 4A/4B landing of `e2e/` (Playwright
+specs) + `playwright.config.ts` had no corresponding exclusion in
+`vite.config.ts`'s Vitest `test` block, so `npx vitest run` was sweeping
+up the three new `*.spec.ts` Playwright files and failing 3 "suites"
+with `Playwright Test did not expect test.describe() to be called
+here` (Playwright's `test.describe` collided with Vitest's own runner).
+Not something either concurrent task did wrong on its own terms — it's
+exactly the kind of cross-tool config seam this role exists to catch —
+fixed by adding `exclude: [...configDefaults.exclude, 'e2e/**']` to
+Vitest's config (one line, `vitest/config`'s `configDefaults` import).
+While in that file, also had to drop the pre-existing `/// <reference
+types="vitest/config" />` triple-slash comment: adding a real `import
+... from 'vitest/config'` alongside it tripped
+`@typescript-eslint/triple-slash-reference` (the import already carries
+the same ambient types, making the reference redundant) — a lint-only
+fix, no behavior change.
+
+Worked (re-verified full suite after both fixes):
+  - `npx tsc -b --noEmit` -> clean.
+  - `npx eslint . --max-warnings 0` -> clean.
+  - `npx vitest run` -> 32/32 files, 134/134 tests passing (up from 131
+    before this fix: +2 new `errorCopy.test.ts` cases for the
+    `empty_results` context's query-interpolation and offline-priority
+    behavior, +1 new `ErrorState.test.tsx` case for the `retryLabel`
+    override; `EmptyQueueState.test.tsx`'s existing 2 tests pass
+    unmodified against the rewritten internals). No more Playwright-spec
+    files leaking into the Vitest run.
+  - `npm run build` -> succeeded (743 modules now, reflecting 4A/4B's
+    App.tsx composition having landed since my last COMPLETE entry;
+    manifest/sw.js generated correctly).
+  - `npx playwright test --list` -> resolves cleanly against the real
+    `playwright.config.ts`/`e2e/` that landed since my last entry,
+    listing 4A's/4B's 7 tests across 3 files — confirms the Vitest
+    `exclude` fix didn't disturb Playwright's own independent discovery
+    of the same directory.
+Changed: `frontend/src/components/errorCopy.ts` (new `empty_results`
+context + `query` param), `frontend/src/components/errorCopy.test.ts`
+(2 new cases), `frontend/src/components/ErrorState.tsx` (new `query`/
+`retryLabel` props), `frontend/src/components/ErrorState.test.tsx` (1
+new case), `frontend/src/components/screens/EmptyQueueState.tsx`
+(rewired to render via `ErrorState` instead of hardcoded copy — no
+change to its exported props/behavior), `frontend/vite.config.ts`
+(Vitest/Playwright exclude fix + triple-slash-reference cleanup, both
+incidental to the requested fix but needed for a clean `vitest run`).
+Open: the two informational-only items from the review (retryQueueStore
+has no size cap; `initOfflineSync()` still has zero call sites) are
+correctly identified as low-risk/already-tracked-elsewhere and not
+addressed here, per the coordinator's explicit instruction that they
+need no action from this task. Playwright offline-emulation coverage
+(§15.6, this task's original open item) remains unwritten — infra
+(`playwright.config.ts`/`e2e/`) now exists courtesy of 4A/4B, so it's
+no longer blocked the way it was at this task's original COMPLETE entry,
+but the coordinator's ask for this round was scoped specifically to the
+EmptyQueueState wiring gap; flagging that this is now unblocked and
+ready to pick up (by me or whoever) rather than doing it unprompted in
+the same pass.
+
+[2026-07-05T01:20:00] TASK 4A — COMPLETE
+Note on concurrency: Tasks 4A/4B/4C were dispatched in parallel to this
+same agent role (per orchestrator.log's 2026-07-05 dispatch entry) and
+landed in the *same* working tree at the same time — several shared
+files (`App.tsx`, `CONTRACTS.md`, `frontend/e2e/support/mswBrowser.ts`,
+`frontend/src/api/mocks/e2eHandlers.ts`) show concurrent edits from 4B's
+Zotero-push wiring and 4C's offline/error-handling wiring interleaved
+with mine. I re-read each shared file immediately before/after every
+edit and re-ran the full check suite after every concurrent change
+landed, rather than editing blind; no conflicting edits were lost on
+either side as far as I can verify — see the two file-modification
+system notes mid-session (App.tsx growing 4B's `ZoteroPushModal`/
+`useDisconnectZotero` wiring on top of my core-loop structure without
+disturbing it, and `e2eHandlers.ts`/`mswBrowser.ts` growing 4B's Zotero
+mock state on top of the stateful harness I built for the happy-path
+test).
+
+Did (this task's own scope):
+1. **Contract drift fix (logged as its own PIVOT above).** CONTRACTS.md
+   §5 rewritten from a single pinned field name into the full
+   `QueueItem`/`QueueResponse`/`SavedItem`/`SavedListResponse`/
+   `SearchSettingsResponse` shapes, matching the real backend exactly.
+   Fixed on the frontend only: `frontend/src/api/types.ts` (flat
+   `QueueItem`/`SavedItem`, `QueueResponse.total_count` added,
+   `SearchSettingsResponse.query` now `string | null`),
+   `frontend/src/api/decisions.ts`/`saved.ts` (optimistic-update lookups
+   updated from `item.paper.pmid` to `item.pmid`),
+   `frontend/src/api/mocks/fixtures.ts` (flat fixture shapes),
+   `frontend/src/components/screens/types.ts` (now derives `Paper`/
+   `QueueItem`/`SavedItem`/`AbstractSegment`/`ApiError` from
+   `api/types.ts` instead of an independently-invented, now-consolidated
+   second type set; `isRetracted()` now checks `retracted: boolean`
+   instead of string-matching `publication_types`; dropped the
+   unbacked `all_authors` read-aloud toggle per SPEC.md §3.2.C's actual
+   3-field cap), `StackScreen.tsx`/`SavedListPanel.tsx` (metadata-line
+   rendering updated for `last_author: string | null` instead of an
+   object), `frontend/src/components/screens/fixtures.ts` (flat
+   `QueueItem` fixtures).
+2. **TanStack Query hooks pointed at the real backend.** No code change
+   needed in `api/client.ts` itself — `apiFetch` already targeted
+   `VITE_API_BASE_URL` (default `/api/v1`) and `credentials: "include"`
+   per Task 2A/2C; MSW mocks (Task 2C's `mocks/server.ts`) remain
+   Vitest-only, untouched, per this task's explicit instruction.
+3. **Framer Motion swipe gesture + single decision function (§11.4).**
+   Added `framer-motion` as a real dependency. New
+   `frontend/src/gestures/useSwipeToDecide.ts`: axis-lock detection
+   (horizontal-dominant offset required to commit), a 110px commit
+   threshold, rotate+translate transform bound to drag position, fading
+   colored INTERESTED/SKIP overlays keyed to drag progress — reimplemented
+   from `design/assets/LLPaperCard.dc.html`'s math only, nothing else
+   ported from that reference (its own playback engine/state/abstract
+   shape are all superseded, per BuildPlan's explicit instruction).
+   `StackScreen.tsx` now wraps the current card in a `motion.div` using
+   this hook; its tap buttons and keyboard handler both call the hook's
+   `triggerDecision`, which — like a real drag commit — funnels through
+   the hook's one `commitExit` function that calls the caller's
+   `onDecide` synchronously (never waiting on the exit animation, per
+   §4.6) and then plays the same visual exit animation either way. This
+   is the actual "swipe/tap/keyboard call the same function" requirement
+   satisfied at the gesture-hook layer; one level up, `App.tsx`'s
+   `decide()` closure is the *real* single decision function per §11.4
+   (optimistic update via `useUpdateDecision`'s existing `onMutate` +
+   `PATCH /decisions/{pmid}` + next-up-paper's abstract prefetch via
+   `queryClient.prefetchQuery`), called identically by
+   `handleStackDecide` (swipe/tap/keyboard, `decided_via: "swipe"`) and
+   `usePlaybackEngine`'s `onFinished` callback (§5.3b's auto-decide,
+   `decided_via: "auto"`).
+4. **`usePlaybackEngine` wired to the real abstract endpoint.** No shape
+   mismatch found here — 2D built `PlaybackItem`/pause-class handling
+   generically against CONTRACTS.md §1's `AbstractSegment` exactly as
+   its own build log anticipated. `App.tsx` assembles the real
+   `[title, metadata, ...segments]` `PlaybackItem[]` list from the real
+   `QueueItem` (title/metadata) and the real `useAbstract(pmid)` response
+   (`segment.spoken_text`/`segment.pause_class`) — a genuine swap of data
+   source, not a rewrite, confirming Task 0.2's contract *did* hold for
+   this seam.
+5. **App-level wiring — the first real one (`frontend/src/App.tsx`).**
+   `App.tsx` was still Tier 0's placeholder; built the actual
+   composition: `panelStore`-driven panel switching (search/stack/saved),
+   `searchDraftStore` hydration from `GET /search/settings` on first
+   load, Idle vs. empty-queue vs. stack-with-current-card branching,
+   engine-status mirrored one-way into `playbackStore` (§11.2 — the
+   engine, §11.3, stays the one source of truth for *whether* narration
+   is playing; the store is a read-only reflection for components, never
+   an independently-toggled duplicate of the same fact), and the
+   `decide()`/`handleStackDecide`/`handleStart` closures described above.
+   Wired `QueryClientProvider` into `main.tsx` (was missing entirely —
+   `App.tsx` as a placeholder never needed it). Zotero collection
+   selection/push (Screen D1) intentionally left as no-op stubs for Task
+   4B, which landed its own wiring into this same file afterward (see
+   concurrency note above).
+6. **Playwright installed and wired.** `@playwright/test` added;
+   `frontend/playwright.config.ts` runs against `vite preview` (the real
+   production bundle, matching §15.5's Lighthouse-against-`dist/`
+   precedent) rather than `vite dev`. Hit two real environment issues
+   while wiring this, both fixed: (a) chaining `npm run build && npm run
+   preview` as one `webServer.command` was flaky against Playwright's
+   own readiness detection — split into a separate `npm run build`
+   step in the `e2e` script, `webServer.command` just runs `preview`;
+   (b) `vite preview` with no `--host` binds IPv6 `localhost` (`::1`)
+   only, not `127.0.0.1` — Playwright's readiness probe against a
+   literal `127.0.0.1` URL silently killed an otherwise-healthy server
+   after its timeout; fixed by using `localhost` consistently in both
+   `baseURL` and `webServer.url`. Added `npm run e2e`/`e2e:ui` scripts.
+7. **Browser-side MSW wiring for Playwright's "MSW" journeys.** Ran
+   `npx msw init public --save` (generates `public/mockServiceWorker.js`).
+   New `frontend/src/api/mocks/browser.ts` (browser `setupWorker`,
+   distinct from Task 2C's Node `server.ts`) and
+   `frontend/src/api/mocks/e2eHandlers.ts` — a *stateful* handler set
+   (unlike Task 2C's static Vitest fixtures) since a real "search ->
+   decide -> saved list" journey needs a `PATCH /decisions/{pmid}` to
+   actually be reflected in the next `GET /queue`/`GET /saved`. Gated
+   behind a `window.__LITLIST_E2E_USE_MSW__` flag `main.tsx` checks
+   before ever rendering — only set by Playwright's own
+   `page.addInitScript` (`e2e/support/mswBrowser.ts`'s
+   `useMswInBrowser`), so production and any real-backend Playwright
+   journey never load this module. 4B extended both files afterward with
+   Zotero-connection/push-mode simulation on top of this same harness.
+8. **Tests added, all three levels:**
+   - Backend: untouched, no backend change was needed for this task
+     (the contract drift was entirely a frontend-side bug) — full suite
+     re-run for confirmation: `pytest -q` => 213 passed.
+   - Frontend unit (Vitest): new
+     `frontend/src/gestures/useSwipeToDecide.test.ts` — the specific
+     regression BuildPlan calls out for this task, asserting swipe (a
+     simulated `onDragEnd` past/below the 110px threshold, plus an
+     axis-lock case), tap, and keyboard all call `onDecide` with
+     identical `(decision)` arguments and only a differing `source`;
+     also covers the `disabled` no-op case. Updated `App.test.tsx`/
+     `Root.test.tsx` (needed a `QueryClientProvider` wrapper now that
+     `App` does real data-fetching) and `decisions.test.tsx` (flat-shape
+     lookup fix). Full suite: `npx vitest run` => 32 files / 134 tests
+     passed. `npx tsc -b --noEmit` clean. `npx eslint . --max-warnings 0`
+     clean.
+   - Playwright (real browser, MSW-backed): `frontend/e2e/
+     happyPath.msw.spec.ts` (§4.1's full search -> triage -> decide ->
+     saved-list journey, decided via tap) and `frontend/e2e/
+     dragGesture.msw.spec.ts` (a real Playwright mouse-drag sequence past
+     the commit threshold produces the identical outcome as the tap
+     path, plus a below-threshold snap-back-without-deciding case) — both
+     new, both mine. `npx playwright test e2e/happyPath.msw.spec.ts
+     e2e/dragGesture.msw.spec.ts` => 3/3 passed against the real built
+     app (`vite preview`) with the browser MSW worker intercepting
+     `/api/v1/...`. The full `frontend/e2e/` suite (including 4B's
+     concurrently-added `zoteroPush.msw.spec.ts`) is 6/7 passing — the
+     one failure (`Step 3b: a per-PMID push failure...`, a strict-mode
+     locator collision between `SavedListPanel`'s own "Download CSV"
+     button and `ErrorState`'s "Download CSV" button both being visible
+     at once) is in 4B's own test/scope, not touched or introduced by
+     this task; flagging for 4B/the coordinator rather than fixing it
+     myself since it's outside this task's file ownership.
+Worked (summary): backend 213/213 (untouched); frontend Vitest 134/134,
+tsc clean, eslint clean; Playwright 3/3 for this task's own two spec
+files (6/7 for the full concurrently-built e2e/ directory, the one
+failure is 4B's).
+Changed: CONTRACTS.md (§5 rewrite + change-log entry); frontend/src/api/
+types.ts, decisions.ts, saved.ts, mocks/fixtures.ts; frontend/src/
+components/screens/types.ts, StackScreen.tsx, SavedListPanel.tsx,
+fixtures.ts; frontend/src/gestures/useSwipeToDecide.ts (new),
+useSwipeToDecide.test.ts (new); frontend/src/App.tsx (new real wiring;
+further extended by 4B afterward, see concurrency note),
+frontend/src/App.test.tsx, frontend/src/main.tsx,
+frontend/src/routes/Root.test.tsx; frontend/playwright.config.ts (new);
+frontend/e2e/happyPath.msw.spec.ts (new),
+frontend/e2e/dragGesture.msw.spec.ts (new),
+frontend/e2e/support/mswBrowser.ts (new; extended by 4B afterward);
+frontend/src/api/mocks/browser.ts (new), e2eHandlers.ts (new; extended
+by 4B afterward); frontend/public/mockServiceWorker.js (generated);
+frontend/package.json/package-lock.json (framer-motion,
+@playwright/test added; `e2e`/`e2e:ui` scripts); frontend/
+eslint.config.js (ignore generated mockServiceWorker.js and Playwright
+artifact dirs); .gitignore (Playwright artifact dirs).
+Open: Zotero collection selection/push (Screen D1) is 4B's own scope,
+landed concurrently in the same `App.tsx`/e2e harness I built — its one
+failing Playwright test (strict-mode duplicate "Download CSV" button)
+is unresolved and not mine to fix. The "queue exhausted, no pending
+items left" and "zero-result search" states in `App.tsx` currently
+share one `EmptyQueueState` surface with identical copy — SPEC.md
+doesn't call for distinct copy between them, but worth a second look if
+that's ever found to be confusing in practice. `hasSearchedThisVisit`'s
+heuristic (`Boolean(searchSettings.data?.query) || runSearch.isSuccess`)
+is a reasonable but not exhaustively-tested edge case for "user reloads
+mid-session right after a search that hasn't been persisted to
+`search/settings` yet" — SPEC.md doesn't pin an exact reconciliation
+rule here and none of this task's own tests exercise that specific
+race, flagging rather than silently asserting it's handled.
+
+[2026-07-05T01:20:00] TASK 4B — COMPLETE
+Did (BuildPlan.md Task 4B, SPEC.md §8, §5.4, §5.5, §9.6):
+
+**Backend side of the seam (contract fix, see this task's own PIVOT
+entry above for the full mismatch explanation):**
+- `backend/app/routes/zotero.py`: added `_callback_redirect()`; every
+  outcome of `GET /zotero/auth/start` and `GET /zotero/auth/callback`
+  (success and all three failure paths: `zotero_session_mismatch`,
+  `service_unavailable` from either route) is now a `302` redirect to
+  the frontend's real `/oauth/zotero/callback` route with `?status=...`
+  query params, never a raw JSON body — both of these are real-browser-
+  navigation endpoints, not `fetch` targets.
+- `backend/app/config.py`/`.env`/`.env.example`:
+  `zotero_post_auth_redirect_url`'s default now points at the frontend's
+  actual callback path instead of the SPA home page with an unparsed
+  `?zotero=connected` param.
+- `CONTRACTS.md`: added §6 pinning this redirect's query-param shape,
+  plus a change-log entry explaining which side had to move and why.
+
+**Frontend side (the OAuth round-trip hand-off, §8.2 step 6):**
+- `frontend/src/routes/ZoteroCallbackRoute.tsx`: on `?status=success`,
+  writes a one-shot `sessionStorage` flag before the existing `goHome()`
+  hand-off — needed because this route is reached via a real, hard page
+  navigation, so no in-memory store survives the round-trip on its own.
+- `frontend/src/state/zoteroPushFlowStore.ts` (new): local-only (§11.2)
+  "is the push-flow modal open" state; consumes (reads-and-clears) that
+  sessionStorage flag once at module-init time and opens the Saved List
+  panel (`panelStore`) when present — the mechanism behind "the app
+  proceeds straight to collection selection" (§8.2 step 6) without a
+  separate login-success screen.
+
+**The actual Zotero export wiring (2B's presentational components <->
+3B's real routes), built as self-contained drop-ins under
+`frontend/src/features/zotero/` rather than edits to `ZoteroPushFlow.tsx`/
+`SavedListPanel.tsx` themselves (both already exposed the right props;
+4C was concurrently touching `ZoteroPushFlow.tsx`'s failure-step
+rendering and 4A concurrently touching `SavedListPanel.tsx`'s display
+formatting, so keeping this task's edits out of those two files avoided
+stepping on either):**
+- `useZoteroPushFlowController.ts`: drives `ZoteroPushFlow`'s full step
+  machine (connect/choose_collection/success/failure) against the real
+  `GET/POST /zotero/collections` and `POST /zotero/push`. Inspects
+  CONTRACTS.md §3's per-PMID `results[]` itself rather than trusting bare
+  HTTP success — a response with any per-item failure routes to
+  `failure`/`push`, and Retry resubmits *only* the PMIDs that actually
+  failed (never the whole saved list again, per §8.7). A failure of the
+  push *request itself* (network/5xx) routes to `failure`/`connection`,
+  kept distinct via the existing `failureReason` prop. `isOffline` reads
+  4C's `networkStore` rather than re-deriving connectivity. `onConnect`
+  does a real full-page navigation to `/zotero/auth/start` (never a
+  fetch, consistent with the OAuth fix above).
+- `ZoteroPushModal.tsx`: self-contained wrapper (reads `useSaved()` for
+  PMIDs, the new store for open/close) — `App.tsx` needed exactly one
+  import + one JSX line to pick it up.
+- `App.tsx`: replaced 4A's three explicitly-flagged no-op stubs
+  (`onPushToZotero`/`onDownloadCsv`/`onDisconnectZotero`) with real
+  wiring (`openZoteroPushFlow`/`getExportCsvUrl` navigation/
+  `useDisconnectZotero().mutate()`) and mounted `<ZoteroPushModal />`.
+  `SavedListPanel`'s `isZoteroConnected` was already wired by 4A via the
+  same `useZoteroCollections` query my controller also uses — TanStack
+  Query dedupes by query key, so this isn't a second network call.
+- `frontend/e2e/support/mswBrowser.ts` /
+  `frontend/src/api/mocks/e2eHandlers.ts`: additive extensions to 4A's
+  already-built Playwright+MSW harness (new `useZoteroConnectedInBrowser`/
+  `useZoteroPushMode` helpers; new stateful collections/push/disconnect
+  handlers) — the real OAuth handshake has no MSW-mockable equivalent,
+  so these seed the connection as already-established and let a journey
+  exercise everything downstream of that.
+
+Worked (all three test levels, per this task's own brief):
+- Backend (`pytest`): 213/213 passing (15/15 in `test_zotero_routes.py`,
+  incl. 1 new redirect-shape test for `start_auth`'s failure path and 3
+  rewritten assertions for `auth_callback`'s now-redirect-based error/
+  success paths); `ruff check`/`mypy` clean on every changed file.
+- Frontend unit/RTL+MSW (`vitest`): 32 files / 134 tests passing, incl.
+  8 new tests in `useZoteroPushFlowController.test.tsx` (connect/choose/
+  success/push-failure-with-partial-retry/connection-failure/cancel-
+  done), 2 in `ZoteroPushModal.test.tsx`, 3 in `zoteroPushFlowStore.test.ts`,
+  2 new in `ZoteroCallbackRoute.test.tsx` for the sessionStorage flag.
+  `npm run typecheck`/`npm run lint --max-warnings 0`/`npm run build` all
+  clean.
+- Playwright+MSW (`e2e/zoteroPush.msw.spec.ts`, 4 specs, real Chromium
+  against the real built app): connect-prompt-when-not-connected,
+  all-success, per-PMID push-failure (distinct failure/push copy +
+  CSV fallback), and connection-level push-failure (failure/connection)
+  — all passing; confirmed 4A's own 3 existing e2e specs
+  (`happyPath`/`dragGesture`) still pass unaffected by the shared-
+  infra extensions (7/7 total).
+
+Changed: backend/app/routes/zotero.py, backend/app/config.py,
+backend/.env, backend/.env.example, backend/tests/test_zotero_routes.py,
+CONTRACTS.md; frontend/src/routes/ZoteroCallbackRoute.tsx (+.test.tsx),
+frontend/src/state/zoteroPushFlowStore.ts (new, +.test.ts),
+frontend/src/state/index.ts, frontend/src/features/zotero/
+(new: useZoteroPushFlowController.ts +.test.tsx, ZoteroPushModal.tsx
++.test.tsx, index.ts), frontend/src/App.tsx (targeted additions only —
+3 stub handlers + 1 mount line, no other change), frontend/e2e/
+zoteroPush.msw.spec.ts (new), frontend/e2e/support/mswBrowser.ts
+(additive), frontend/src/api/mocks/e2eHandlers.ts (additive),
+frontend/playwright.config.ts (pre-existing, added by 4A concurrently —
+not touched by this task beyond reading it to reuse).
+
+Open: no true end-to-end test exercises the real Zotero OAuth provider
+itself (correctly out of scope — BuildPlan files that under Tier 6's
+manual smoke test); everything up to and after that handshake is now
+covered at all three levels. `App.tsx`'s "connected" signal briefly
+reads as "not connected" while `useZoteroCollections` is still loading
+(a few hundred ms after opening the Saved List panel) — a documented,
+minor UX simplification in `useZoteroPushFlowController.ts`'s comments,
+not hidden. No blockers for other tasks.
+
+[2026-07-05T01:30:00] TASK 4A — PIVOT (post-verification fix, coordinator-relayed)
+Tester's TASK 4A VERIFY confirmed everything in this task's originally
+enumerated scope (contract-drift fix, non-vacuous single decision
+function across swipe/tap/keyboard, real abstract-endpoint wiring) but
+found a real functional gap the original COMPLETE entry didn't cover:
+`App.tsx` never read `.isError`/`.error` off any TanStack Query hook and
+never touched Task 4C's `networkStore`/`initOfflineSync` — so a failed
+search, a failed `GET /queue`, or the user going offline all rendered as
+silent nothing, even though `SearchSettingsPanel`'s `error`/`isOffline`/
+`onRetry` props and the shared `ErrorState` component existed
+specifically to receive this. Confirmed correct: this was a real gap,
+not a test-only one — nothing in `App.tsx` would have shown the user
+anything if `POST /search` or `GET /queue` returned `service_unavailable`
+or the device went offline mid-session.
+
+Fixed:
+1. `frontend/src/main.tsx` now calls `initOfflineSync()` once at
+   bootstrap (before rendering) — Task 4C built and unit-tested this
+   function but it was never wired into the one real app entry point.
+2. `frontend/src/App.tsx`: reads `useNetworkStore`'s `isOnline` once
+   (`isOffline = !isOnline`, per `errorCopy.ts`'s documented priority
+   rule that offline always wins over a server-reported code) and
+   threads `error`/`isOffline`/`onRetry` into `SearchSettingsPanel`'s
+   already-built props (`onRetry` re-runs `handleStart` with the current
+   draft). Also added two branches that weren't part of the original
+   composition: `queue.isError` now renders the shared `ErrorState`
+   (with a real `onRetry={() => queue.refetch()}`) instead of falling
+   through to `EmptyQueueState`'s misleading "no papers matched" copy —
+   this exact collapse is what tester's queue-fetch-failure scenario
+   would have hit; and `currentAbstract.isError` (the current card's own
+   abstract/narration fetch failing, queue otherwise fine) now also
+   renders `ErrorState` with `onRetry={() => currentAbstract.refetch()}`
+   rather than silently rendering a card with an empty abstract and no
+   narration content.
+3. Added a helper `apiErrorOrNull()` since TanStack Query's `error` is
+   typed `unknown` — narrows to the real `ApiError` class (which
+   structurally satisfies `ErrorState`'s `ApiErrorBody` prop) or `null`
+   for a non-`ApiError` failure (e.g. a network-level throw before any
+   response), which `isOffline`'s own copy already covers.
+4. Rewrote `frontend/src/App.test.tsx` from the prior 14-line trivial
+   smoke test into 4 cases, resetting `panelStore`/`searchDraftStore`/
+   `networkStore` between tests (same `getInitialState()` +
+   `setState(..., true)` pattern already used by this project's other
+   Zustand store tests) since these are module-level singletons that
+   would otherwise leak state across tests in the same file: (a) the
+   pre-existing Idle-screen smoke case; (b) `POST /search` returning
+   `service_unavailable` renders `ErrorState` with the correct
+   `data-code` and a working "Retry" button; (c) flipping
+   `networkStore.setOnline(false)` renders the distinct "You're offline"
+   copy — proving offline and `service_unavailable` don't collapse into
+   one message per `errorCopy.ts`'s own guarantee; (d) `GET /queue`
+   failing (simulated as a resumed session via `GET /search/settings`
+   already reporting a real `query`, since `useRunSearch`'s own
+   `onSuccess` seeds the queue cache directly and would otherwise mask a
+   `GET /queue`-specific failure) renders `ErrorState`, never the
+   zero-result "no papers matched" copy. Case (d) initially failed
+   against a "run a real search, then fail GET /queue" scenario — caught
+   in the process that `useRunSearch`'s existing (correct, Task 2C-built)
+   behavior of seeding the queue cache directly from the search response
+   makes that specific interleaving unreachable; rewrote the test to hit
+   the actually-reachable "resumed session, `GET /queue` fails on load"
+   path instead, rather than asserting a scenario the app's real
+   architecture can't produce.
+Worked: `npx vitest run` => 32 files / 137 tests passed (up from 134,
+the 3 new App.test.tsx cases net of the 1 rewritten). `npx tsc -b
+--noEmit` clean. `npx eslint . --max-warnings 0` clean. Re-ran this
+task's own two Playwright specs plus the full `e2e/` suite after the
+fix: `npx playwright test` => 7/7 passed (this task's `happyPath.msw.
+spec.ts`/`dragGesture.msw.spec.ts` plus 4B's `zoteroPush.msw.spec.ts`,
+whose one previously-flagged failure has since been independently
+resolved by 4B — no longer an open item). Backend re-run for
+confirmation of no regression from this fix (none expected, none made):
+`pytest -q` => 213 passed.
+Changed: frontend/src/main.tsx (`initOfflineSync()` call added);
+frontend/src/App.tsx (`isOffline` read from `useNetworkStore`,
+`apiErrorOrNull()` helper, `SearchSettingsPanel` error/isOffline/onRetry
+wiring, new `queue.isError`/`currentAbstract.isError` branches rendering
+`ErrorState`); frontend/src/App.test.tsx (rewritten, 4 cases).
+Open: none from this fix. Requesting re-dispatch of verification.
+
+[2026-07-05T01:30:00] TASK 4B — PIVOT (post-review fixes, two SIGNIFICANT findings)
+Adversarial review (logs/adversarial-generalist.build.log, "TASK 4B
+REVIEW") found no BLOCKING issues (OAuth param parsing, XSS, token
+handling, and the session-fixation atomic commit all held up under
+attempted breakage) but two real, reachable SIGNIFICANT bugs in the push
+sub-flow wiring:
+1. `useZoteroPushFlowController.ts`'s `runPush` had no guard against a
+   second call while a push mutation was already in flight, and
+   `ZoteroPushFlow.tsx`'s Save/Retry buttons were never disabled during
+   one — a rapid double-click fires two concurrent `POST /zotero/push`
+   requests with the same PMID list, and the backend has no dedup, so
+   this creates genuine duplicate items in the user's real Zotero
+   library.
+2. Nothing prevented Cancel (closing the modal) or Disconnect Zotero
+   (Saved List panel) from being used while a push was still in flight.
+   Backend-side, `push_items` decrypts the token once at request start
+   and completes independent of a concurrent `DELETE /zotero/connection`
+   — reviewer correctly scoped the fix to the frontend (preventing the
+   racing UI actions) rather than backend transaction semantics, which
+   is reasonable given the token is already fetched by the time a
+   concurrent disconnect could land.
+Fixing both now: an early-return guard in `runPush` plus a real
+`isSaving` (mirrors `push.isPending`) prop disabling/relabeling Save and
+Retry while a push is in flight; a `confirmDisconnectDuringPush` guard
+(new, unit-tested in isolation) wired into `App.tsx`'s Disconnect
+handler so disconnecting during an in-flight push requires an explicit
+confirmation naming the risk, rather than firing silently. Adding
+regression tests for both (rapid double-call asserting exactly one
+mutation fires; confirm-guard blocking/allowing based on the pending
+flag and the confirm response).
+
+[2026-07-05T01:45:00] TASK 4B — COMPLETE (post-review fixes)
+Did: fixed both SIGNIFICANT findings from adversarial review (logs/
+adversarial-generalist.build.log, "TASK 4B REVIEW"), with regression
+tests at all three levels for each.
+
+**Finding #1 (duplicate Zotero pushes via double-submit).** First
+attempt used `if (push.isPending) return` — wrong, because
+`push.isPending` is React state: two synchronous calls in the same tick
+(a fast double-click, or Save immediately followed by Retry) both close
+over the same not-yet-committed value, exactly the re-entrancy failure
+mode Task 2D's playback engine hit and documented in its own PIVOT entry.
+Proved this by writing the regression test first — it failed with 2
+mutation calls against the naive guard, confirming the bug is real, not
+theoretical. Fixed with `isPushingRef` (a plain ref, not state) in
+`useZoteroPushFlowController.ts`: set `true` synchronously before
+`push.mutate(...)`, cleared in `onSettled` (success and error alike).
+`ZoteroPushFlow.tsx` also gained an `isSaving` prop (Save/Cancel/
+offline-pending-retry disabled + Save relabeled "Saving…" while true) and
+`ErrorState.tsx` gained `retryDisabled` (the failure step's Retry
+button) — both additive/UI-only, the ref guard is what actually holds.
+
+**Finding #2 (Disconnect/Cancel racing an in-flight push).** `onCancel`
+now checks the same `isPushingRef` and no-ops while a push is in flight
+(button also disabled via `isSaving`). For Disconnect — a different
+component (`SavedListPanel`, composed in `App.tsx`) with no visibility
+into the push flow's internal state — mirrored `push.isPending` into the
+existing `zoteroPushFlowStore` (`isPushPending`/`setPushPending`, reset
+on unmount too) and added `confirmDisconnectDuringPush.ts` (new, small,
+independently unit-tested pure-ish function): when a push is pending,
+Disconnect now requires an explicit native-confirm acknowledging the
+risk (backend intentionally left alone, per reviewer's own scoping — the
+token is already fetched by the time a concurrent disconnect could land,
+so the fix belongs in the racing UI action, not backend transaction
+semantics) rather than firing silently.
+
+Worked, reproduced-then-fixed at all three levels (each regression test
+confirmed to fail against a reverted fix, then re-verified passing after
+restoring it — not just written and assumed correct):
+- Frontend unit/RTL+MSW (`vitest`): 149/149 passing project-wide, incl.
+  4 new tests in `useZoteroPushFlowController.test.tsx` (rapid double-
+  call fires exactly 1 mutation + a subsequent Retry-while-pending is
+  also a no-op; `isSaving` mirrors `push.isPending`; `onCancel` no-ops
+  while pending then works once settled; `isPushPending` mirrors into
+  the shared store), 4 new in `ZoteroPushFlow.test.tsx` (Save/Cancel/
+  offline-retry disabled + relabeled while `isSaving`), 1 new in
+  `ErrorState.test.tsx` (`retryDisabled`), 1 new in
+  `zoteroPushFlowStore.test.ts` (`setPushPending`), 2 new in
+  `confirmDisconnectDuringPush.test.ts`. `npm run typecheck`/
+  `npm run lint --max-warnings 0`/`npm run build` all clean.
+- Playwright+MSW (real Chromium, real built app): new spec in
+  `e2e/zoteroPush.msw.spec.ts` dispatches two real DOM clicks on Save
+  (bypassing Playwright's own actionability re-check, which would
+  otherwise just wait out the button's disabled state rather than
+  reproducing a genuine race) and asserts, via Playwright's own
+  network-level request listener, that exactly one real
+  `POST /zotero/push` request reaches the mock backend — confirmed this
+  fails (2 requests) against the reverted fix and passes (1 request)
+  against the restored one. Full e2e suite: 8/8 passing (5 Zotero + 3
+  pre-existing from 4A, unaffected).
+- Backend: unaffected by this round (both findings and fixes are
+  frontend-only, per reviewer's own scoping) — re-ran full suite anyway
+  as a sanity check, 213/213 still passing.
+
+Changed: frontend/src/features/zotero/useZoteroPushFlowController.ts
+(isPushingRef guard, isSaving, handleCancel guard, store mirroring),
+frontend/src/features/zotero/useZoteroPushFlowController.test.tsx (+4),
+frontend/src/features/zotero/confirmDisconnectDuringPush.ts (new),
+frontend/src/features/zotero/confirmDisconnectDuringPush.test.ts (new),
+frontend/src/features/zotero/index.ts, frontend/src/components/screens/
+ZoteroPushFlow.tsx (+isSaving prop/disabled states), frontend/src/
+components/screens/ZoteroPushFlow.test.tsx (+4), frontend/src/
+components/ErrorState.tsx (+retryDisabled), frontend/src/components/
+ErrorState.test.tsx (+1), frontend/src/state/zoteroPushFlowStore.ts
+(+isPushPending/setPushPending), frontend/src/state/
+zoteroPushFlowStore.test.ts (+1), frontend/src/App.tsx (Disconnect
+handler now goes through confirmDisconnectDuringPush), frontend/e2e/
+zoteroPush.msw.spec.ts (+1 double-click regression spec).
+
+Open: none for this task's own scope — both findings closed and
+re-verified. Requesting re-dispatch of verification.
+
+[2026-07-05T02:00:00] TASK 4A — PIVOT (post-adversarial-review fixes, BLOCKING + SIGNIFICANT)
+Adversarial review (logs/adversarial-generalist.build.log, "TASK 4A
+REVIEW") found one BLOCKING and one SIGNIFICANT issue, both confirmed
+real and both fixed — this overrides tester's prior "gate met" verdict
+per BuildPlan's precedence rule.
+
+**BLOCKING — mid-narration decisions never called
+`speechSynthesis.cancel()`.** `App.tsx`'s `decide()` (the §11.4 decision
+function) only called `playback.resetForNewPaper()` — a Zustand store
+write that flips the UI's *displayed* `isPlaying`/highlight state but
+never touches `usePlaybackEngine`'s own live utterance/refs
+(`statusRef`/`generationRef`/`currentUtteranceRef`). SPEC.md §6.6
+explicitly requires the real `cancel()` synchronously as part of the
+decision ("no audible overlap between papers"); without it, the old
+paper's narration kept speaking uninterrupted, and once it eventually
+finished, the engine's own generation-guard didn't catch it (generation
+only bumps on `play()`/`pause()`/`cancel()`, none of which `decide()`
+called), so a stale `onFinished` could fire against `itemsRef.current`
+already pointing at the *new* paper — silently auto-deciding a paper the
+user never heard. This also broke the codebase's own established
+invariant (documented in `usePlaybackEngine.ts`/`playbackStore.ts`) that
+the engine is the sole source of truth for playback state and the store
+is a read-only reflection — `resetForNewPaper()` was writing the store
+out of band.
+Fix: reordered `App.tsx` so `usePlaybackEngine` is constructed before
+`decide()` (bridging the reverse dependency — `onFinished`'s auto-decide
+path needs to call `decide()`, which needs `engine.cancel` — via a
+`decideRef` ref updated in an effect, avoiding a circular
+`useCallback`). `decide()` now calls `engine.cancel()` synchronously as
+its first line, and no longer calls `playback.resetForNewPaper()` at
+all — `cancel()` already drives `isPlaying` back to `false` (via the
+existing engine-status-mirroring effect) and the highlighted segment
+back to `null` (via `cancel()`'s own `onItemChange(null)` call), so the
+store needs no separate out-of-band write; this restores the "engine is
+the one source of truth" invariant rather than just papering over the
+symptom.
+Test added: `App.test.tsx`'s new `describe('mid-narration decisions call
+the playback engine's cancel() (§6.6)')` — mocks the whole
+`usePlaybackEngine` module (`vi.mock`) so the test can assert `App.tsx`'s
+own `decide()` closure calls the *real* exported `cancel()` function
+synchronously (no `waitFor`, matching §6.6's synchronous requirement),
+independent of the real hook's internal mechanics (which have their own
+separate, already-existing coverage in `usePlaybackEngine.test.ts`).
+Two cases: decide-while-playing calls `cancel()` exactly once
+synchronously; decide-while-idle also calls it (documented as correct,
+simplest-to-reason-about behavior — `cancel()` is cheap/idempotent, and
+calling it unconditionally is what makes the invariant hold regardless
+of what `App.tsx` *thinks* the status is).
+
+**SIGNIFICANT — `useSwipeToDecide`'s own `disabled` re-entrancy guard
+was dead code.** The hook documented and unit-tested a `disabled` option
+specifically to stop a fast double-swipe from firing two decisions for
+the same paper, but `StackScreen.tsx` called `useSwipeToDecide({
+onDecide })` with no `disabled` argument, and its own props interface
+had no field for `App.tsx` to thread `updateDecision.isPending` through
+— so the guard never actually engaged against a real double input, and
+the backend has no idempotency check of its own either (`update_decision`
+unconditionally overwrites).
+Fix, two layers (matching the reviewer's ask plus one additional
+defense-in-depth layer): (1) added `StackScreen`'s new
+`isDecisionPending?: boolean` prop, threaded straight into
+`useSwipeToDecide`'s `disabled` option; `App.tsx` passes
+`updateDecision.isPending`. (2) Added a synchronous internal
+`hasDecidedRef` guard inside `useSwipeToDecide` itself (same pattern/
+reason as `usePlaybackEngine.ts`'s own `statusRef` fix from Task 2D's
+post-review round): a React state prop like `isPending` hasn't
+necessarily committed between two input events landing in the same
+tick (two fast keydowns, a double-tap, or a synchronous test firing two
+triggers back to back), so a plain ref read/written synchronously inside
+`commitExit` closes that gap regardless of render timing — this is the
+primary guard; `disabled`/`isPending` is the secondary, real-world
+"already in flight to the server" signal. Also added `key={pmid}` to
+`App.tsx`'s `<StackScreen>` so each card gets a fresh
+`StackScreen`/`useSwipeToDecide` instance (matching real per-card
+semantics — the guard is scoped to one card's lifetime, not carried
+across cards without an explicit reset mechanism).
+Tests added: `useSwipeToDecide.test.ts`'s new "re-entrancy: a single
+instance never commits a second decision" describe block (two rapid
+`triggerDecision` calls / a drag-commit immediately followed by a tap /
+a committed decision permanently blocking any later call on the same
+instance — all in one `act()` block, i.e. genuinely the same tick).
+`StackScreen.test.tsx`'s new "never fires a second decision for the
+same card" and "does not commit... while isDecisionPending is true"
+cases.
+Test-suite fallout from adding the guard (expected, not a regression):
+three pre-existing tests had been calling multiple *sequential*
+decisions on the *same* hook/component instance to compare swipe vs.
+tap vs. keyboard call shapes — exactly the pattern the new guard now
+correctly blocks, since real usage never does this (a card is decided
+once, then a fresh instance mounts for the next one via `key={pmid}`).
+Rewrote `useSwipeToDecide.test.ts`'s two "same call shape across input
+methods" tests and `StackScreen.test.tsx`'s "routes tap and keyboard
+decisions through the same onDecide callback" test to use a fresh
+`renderHook`/`render` (with explicit `.unmount()` between `document`-
+level-keydown-listening renders, to avoid duplicate-listener/duplicate-
+DOM cross-talk) per input method instead of reusing one instance — this
+is a corrected assumption in the tests, not a functional regression;
+each input method is still proven to produce the identical `onDecide`
+call shape.
+
+MINOR (optional, investigated): reviewer's `tsc -b` TS6133 flakiness
+concern. Cleared `node_modules/.tmp/*.tsbuildinfo` and ran `tsc -b
+--noEmit` twice back-to-back (cold + warm/incremental) — both clean,
+0 errors, consistent. Did not find a reproduction of the flakiness in
+this session; no tsconfig change made since nothing was demonstrated to
+need fixing here. Flagging as still-open/unreproduced rather than
+claiming it's resolved.
+
+Worked (full check suite, actual results, not "should pass"):
+- `npx vitest run` => 33 files / 156 tests passed (up from 137 before
+  this round — 19 net new: the mid-narration-cancel App.test.tsx cases,
+  the useSwipeToDecide re-entrancy cases, the StackScreen re-entrancy
+  cases, minus/plus the rewritten same-call-shape tests).
+- `npx tsc -b --noEmit` => clean, twice in a row (cold and incremental).
+- `npx eslint . --max-warnings 0` => clean.
+- `npm run build` => succeeds (`dist/` produced, PWA precache generated).
+- `npx playwright test` => 8/8 passed (this task's `happyPath.msw.spec.ts`/
+  `dragGesture.msw.spec.ts` plus 4B's `zoteroPush.msw.spec.ts`, which has
+  grown a 4th case since the last round, also green).
+- Backend `pytest -q` => 213 passed (untouched by this round, confirmed
+  no regression).
+Changed: frontend/src/App.tsx (`decide()`/`engine` reordering via
+`decideRef`, `decide()` now calls `engine.cancel()` instead of
+`playback.resetForNewPaper()`, `key`/`isDecisionPending` added to
+`<StackScreen>`); frontend/src/gestures/useSwipeToDecide.ts
+(`hasDecidedRef` synchronous re-entrancy guard); frontend/src/
+components/screens/StackScreen.tsx (`isDecisionPending` prop threaded to
+`useSwipeToDecide`'s `disabled`); frontend/src/gestures/
+useSwipeToDecide.test.ts (rewritten same-call-shape tests + new
+re-entrancy describe block); frontend/src/components/screens/
+StackScreen.test.tsx (rewritten same-call-shape test + new re-entrancy/
+isDecisionPending tests); frontend/src/App.test.tsx (new
+mid-narration-cancel describe block, `usePlaybackEngine` module mock
+infrastructure, `playbackStore` reset added to `beforeEach`).
+Open: the MINOR tsc/tsbuildinfo flakiness reviewer flagged remains
+unreproduced in this session — not claiming it's fixed, just that a
+cold+incremental double-run here was clean. Everything else from both
+the BLOCKING and SIGNIFICANT findings is closed. Requesting re-dispatch
+of verification.
+
+[2026-07-05T01:55:00] TASK 4B — PIVOT (closing tester's coverage-gap finding)
+Coordinator relayed tester's finding: removing `confirmDisconnectDuringPush`/
+`zoteroPushFlowStore` wiring from `App.tsx` entirely still left all
+frontend tests green — the guard is correctly wired but had no
+end-to-end regression coverage, only the isolated unit test for
+`confirmDisconnectDuringPush` itself.
+
+First attempt at closing this gap was itself wrong, caught before
+finishing: a draft test reached into `zoteroPushFlowStore` and called
+`setPushPending(true)` directly before rendering `<App />`, then
+asserted Disconnect required confirmation. This failed — not because
+the guard was broken, but because the test's own premise was: `<App/>`
+always mounts `<ZoteroPushModal />` unconditionally (it returns `null`
+early only after its hooks run), so the *real*
+`useZoteroPushFlowController` instance inside it is always live and its
+own effect (`setPushPending(push.isPending)`) immediately overwrote my
+manually-forced `true` back to `false` from its own (idle) mutation on
+the very next effect pass — the same "handler-side counter runs in a
+context you don't control" lesson as this task's earlier Playwright
+`window` global mistake, just on the vitest/RTL side this time. Fixed by
+driving a *genuinely* in-flight push through the real UI instead: open
+the real push flow, pick a collection, click the real Save button
+against a deliberately-held `POST /zotero/push` MSW response (same
+`deferredPushHandler` technique as `useZoteroPushFlowController.test.tsx`),
+then attempt Disconnect while that real mutation is still pending.
+
+Verified the same way tester verified the original two fixes — stripped
+the guard, confirmed the new tests fail, restored, confirmed they pass
+again — for *both* halves of the wiring an attacker/careless refactor
+could remove independently:
+1. Stripped `App.tsx`'s `handleDisconnectZotero` back to an unconditional
+   `disconnectZotero.mutate()` (no `confirmDisconnectDuringPush` call) —
+   both new "blocks"/"proceeds" tests failed (`confirmSpy` never called),
+   the "no push in flight" test still passed correctly. Restored; all 9
+   pass again.
+2. Stripped `useZoteroPushFlowController.ts`'s two `useEffect`s that
+   mirror `push.isPending` into the shared store — the "blocks" test
+   failed at the setup `waitFor(() => isPushPending === true)` step
+   (timed out at `false`), proving the store-mirroring half is also
+   covered, not just the `App.tsx`-side consumption of it. Restored;
+   all 9 pass again.
+
+Worked: `src/App.test.tsx` — 9/9 passing (6 pre-existing/4A's + 3 new:
+blocks-with-decline, proceeds-with-confirm, no-prompt-when-idle), each
+independently confirmed to fail against the specific piece of wiring it
+covers when that piece is removed. Full frontend suite: 33 files / 159
+tests passing. `npm run typecheck`/`npm run lint --max-warnings 0`/
+`npm run build` all clean.
+
+Changed: frontend/src/App.test.tsx (new `describe` block, 3 tests, plus
+`useZoteroPushFlowStore` added to the file's existing store-reset
+`beforeEach` pattern). No production code changed in this pass — the
+wiring itself (from the prior PIVOT/COMPLETE entries) was already
+correct; this closes the coverage gap only.
+
+Open: none. This should be the last item for Task 4B — requesting
+re-dispatch of verification / closing the task per the coordinator's note.
+
+[2026-07-05T02:05:00] TASK 4B — INCIDENT RECOVERY (App.tsx reset to Tier 0 placeholder)
+Coordinator reported `frontend/src/App.tsx` had been found reset to the
+original Tier 0 placeholder (just the "LitList" heading) — all real
+wiring from Tasks 4A (search/queue/decision/playback composition), 4B
+(Zotero push/disconnect wiring), and 4C (error/offline surfacing) was
+gone. Because `App.tsx` had never been committed, `git diff`/`git log`
+showed nothing to recover from — the working tree file matched the
+initial commit exactly, so this was a genuine loss of uncommitted work,
+not a revertible git operation. No root cause investigation performed
+here (out of this task's scope) — reconstruction only, per the
+coordinator's explicit ask.
+
+Reconstructed `App.tsx` verbatim from this session's own verified
+context: I had read the complete, fully-wired, all-tasks-integrated file
+in full immediately before making my own last edit to it (the
+`confirmDisconnectDuringPush` disconnect-guard wiring), and again
+implicitly via every subsequent `npx vitest run`/`npm run build`/
+Playwright pass in this same session — that reconstructed text is what
+I wrote back, not a re-derivation from scratch. Restored file includes:
+4A's panel routing/search/queue/decision/playback-engine composition
+(the single `decide()` closure calling `engine.cancel()` synchronously
+per the "TASK 4A REVIEW" BLOCKING fix, the `decideRef` bridge into
+`usePlaybackEngine`'s `onFinished`), 4C's `ErrorState`/`isOffline`
+surfacing on `SearchSettingsPanel` and the stack panel's
+queue-error/abstract-error states, and 4B's `ZoteroPushModal` mount,
+`useDisconnectZotero`/`getExportCsvUrl` wiring, and the
+`confirmDisconnectDuringPush` disconnect-race guard from this task's own
+post-review fixes.
+
+Verified genuinely, not just "the file looks right" — ran the full
+check suite fresh after restoring:
+- `npx tsc -b --noEmit` — clean.
+- `npx eslint . --max-warnings 0` — clean.
+- `npx vitest run` — 33 files / 159 tests passing (exact match to the
+  count from this task's last verified state before the incident).
+- `npm run build` — clean production build.
+- `npx playwright test` (real Chromium against the rebuilt app,
+  `webServer` preview on port 4173) — 8/8 passing (3 pre-existing
+  happy-path/drag-gesture specs from Task 4A + 5 Zotero push specs from
+  this task, including the double-click regression test).
+
+Changed: frontend/src/App.tsx (restored in full).
+
+Open: none for this recovery. Flagging for whoever owns repo hygiene
+going forward: `App.tsx` (and likely other files that were also still
+untracked as of this session — `frontend/e2e/`, `frontend/src/features/`,
+`frontend/src/components/ErrorState.tsx`/`CookieConsentNotice.tsx`/
+`errorCopy.ts`, several `frontend/src/state/*.ts` files per this
+session's own `git status` output) have no git history to fall back on
+if this happens again — worth committing Tier 2-4's work to git properly
+rather than leaving it as long-lived uncommitted state, which is
+presumably how this was lost in the first place. Told the coordinator
+this is now restored and verified so they can commit before anything
+else touches this tree.

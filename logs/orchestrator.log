@@ -192,3 +192,104 @@ not a correctness gap).
 Tier 3 (Wave 1: 3A/3B/3C, Wave 2: 3D) is now FULLY CLOSED - every task
 independently verified by tester and adversarial-generalist, every
 real finding fixed and re-verified with revert-reproduce-restore rigor.
+
+[2026-07-05] Tier 4 (Tasks 4A, 4B, 4C) dispatched in parallel per
+BuildPlan.md lines 580-648. Dependency gate satisfied: Tier 2 and
+Tier 3 are both merged. All three tasks assigned to
+senior-fullstack-developer per the Task -> agent table, since this
+tier is wiring across the frontend/backend seam. Neither Playwright
+nor framer-motion are installed yet in frontend/ - both are needed
+for this tier's tests/gesture work and are left to 4A to add.
+
+[2026-07-05] Task 4C - CLOSED (tester + adversarial both cleared,
+post-fix re-verified)
+Adversarial review found one real gap: EmptyQueueState.tsx (Sec5.3a) had
+its own hardcoded copy instead of consuming the shared ErrorState
+component BuildPlan explicitly named it a context for. Fixed by adding
+an "empty_results" context to errorCopy.ts and a retryLabel override
+on ErrorState.tsx (copy-only specialization preserved, no structural
+branching added). While re-verifying, the specialist also caught and
+fixed an incidental cross-task collision: 4A/4B's concurrent Playwright
+setup landing caused vitest to sweep up e2e/ spec files, fixed with a
+one-line vite.config.ts exclude. 134/134 tests, tsc/eslint/build clean.
+Task 4C fully closed. Not yet committing - holding until 4A/4B land
+since all three tasks share frontend/ files concurrently (matches the
+Tier 2 precedent of one combined commit for concurrently-built
+frontend work).
+Open items carried to Tier 4's overall exit gate (not 4C-specific
+blockers): initOfflineSync() has zero call sites pending 4A's App.tsx
+composition; retryQueueStore has no size cap (informational);
+Sec15.6 Playwright offline-emulation test still not written, blocked
+on 4A's App.tsx/Playwright composition landing.
+
+[2026-07-05] Task 4B - FULLY CLOSED (post-adversarial-fix, 3 rounds)
+Adversarial review found two SIGNIFICANT real bugs: (1) no double-
+submit guard, meaning a rapid double-click on Save could fire two
+concurrent pushes and create genuine duplicate items in a user's real
+Zotero library; (2) no guard preventing Disconnect/Cancel from racing
+an in-flight push, meaning a stale push could complete and write items
+AFTER the UI told the user they'd disconnected. Fixed with a
+synchronous ref guard (the specialist's own first attempt using
+React-Query's isPending state was itself broken - proven with a
+failing test first, same class of bug as 2D's earlier re-entrancy fix)
+and a confirmDisconnectDuringPush flow. Tester found one more gap
+after that first fix: the disconnect-race guard was correctly wired
+but had zero end-to-end test coverage (removing it entirely left all
+tests green). Closed with 3 new tests driving a genuinely in-flight
+push through the real mounted UI. Every fix in this chain was
+independently reproduced by tester before being accepted. Final:
+213/213 backend, 159/159 frontend, 8/8 Playwright.
+
+[2026-07-05] Task 4A - FULLY CLOSED (post-blocking-fix, adversarial
+re-confirmed independently)
+Adversarial review found a real BLOCKING issue: App.tsx's decide()
+(the Sec11.4 single decision function) never called usePlaybackEngine's
+real cancel() - only wrote to a Zustand store - so mid-narration
+decisions left the old paper's utterance speaking uninterrupted,
+violating Sec6.6's explicit synchronous-cancel requirement and risking
+cross-paper audio overlap or a stale callback auto-deciding a paper
+the user never heard. Also found a SIGNIFICANT issue: useSwipeToDecide's
+own re-entrancy guard was built but never wired up, so rapid double-
+decisions could fire twice for the same paper. Both fixed: cancel()
+now called synchronously as decide()'s first statement (generation-
+based guard confirmed to correctly no-op any stale callback regardless
+of the native Web Speech API's own cancel() timing); a synchronous
+hasDecidedRef guard now genuinely blocks same-tick double-fires,
+wired through StackScreen's new isDecisionPending prop.
+Both fixes were verified twice: once by tester (who scrutinized 3
+rewritten tests specifically for being a convenient rationalization
+rather than a legitimate fix, concluding legitimate), and once more by
+the SAME adversarial reviewer who found the original bugs, independently
+re-attempting the original attacks against the fixed code rather than
+trusting either report. One cosmetic-only finding survived (a
+misleadingly-named test whose assertion is actually correct) - not
+worth another round-trip, noted as a trivial backlog item.
+Tier 4 (Tasks 4A, 4B, 4C) is now FULLY CLOSED. This tier alone
+surfaced 5 real bugs across its three tasks (App.tsx error/offline
+wiring gap, missing speechSynthesis.cancel(), a dead re-entrancy guard,
+duplicate-push double-submit, and a disconnect/push race) - every one
+caught by tester or adversarial-generalist, none by the specialist's
+own testing, reinforcing why this project's checkpoint discipline is
+non-negotiable even for "just wiring" tasks.
+
+[2026-07-05] INCIDENT: frontend/src/App.tsx wiped to Tier 0 placeholder
+Discovered during final Tier 4 sanity check: App.tsx matched commit
+9749c74 (the very first commit) byte-for-byte, with zero git diff,
+wiping out all of 4A/4B/4C's real wiring. Root cause: App.tsx was never
+committed mid-session, so it had no local git history — a `git
+checkout`-style step inside one of this session's many "temporarily
+revert this change, confirm the test fails, then restore" verification
+experiments (a pattern used throughout this build and explicitly
+encouraged by this orchestrator) reset the file to HEAD's oldest
+committed version instead of undoing the local edit, since there was
+no intermediate commit to restore to. Recovered by asking the last
+agent with verified-correct content to reconstruct App.tsx from its own
+session context; re-verified independently (159/159 vitest, 8/8
+Playwright, clean build) before committing.
+PROCESS FIX going forward: commit each task's work to git as soon as
+it's independently verified (tester + adversarial both cleared, no
+BLOCKING findings open) — not batched until an entire tier closes.
+This session's Tier 4 batching (holding 3 tasks' worth of work
+uncommitted while multiple agents ran destructive revert/restore
+verification cycles on shared files) is exactly the condition that let
+this incident happen. All of Tier 4 is now committed (main@1dd8816).

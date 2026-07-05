@@ -1328,3 +1328,503 @@ handler runs) and the IP key's proxy-header blindness is correct for
 today's direct-to-Render deployment but will need revisiting the moment
 a reverse proxy sits in front of this backend — both already
 self-disclosed in the code's own docstrings, not new information.
+
+[2026-07-05T20:15:00] TASK 4C REVIEW — START
+Reviewing senior-fullstack-developer's Task 4C (offline & error-handling
+unification) against BuildPlan.md lines 580-586/632-646 and SPEC.md
+§11.7, §4.5, §13.6, §4.3, §4.4, §5.3a, §5.5, §10.2. Read the specialist's
+COMPLETE entry (2026-07-05T01:20:00, incl. its concurrent-edit-collision
+PIVOT at 01:10:00) and tester's TASK 4C VERIFY entries (19:34-19:48).
+Read errorCopy.ts, ErrorState.tsx, networkStore.ts, retryQueueStore.ts,
+offlineSync.ts, CookieConsentNotice.tsx, uiStore.ts, EmptyQueueState.tsx,
+and SearchSettingsPanel.tsx directly, plus errorCopy.test.ts and
+offlineSync.test.ts. Independently re-ran `tsc -b --noEmit` and
+`vitest run` (now 32/32 files, 131/131 tests, up from tester's 29/116 —
+consistent with continued concurrent 4A/4B work, no regression).
+
+[2026-07-05T20:35:00] TASK 4C REVIEW — COMPLETE
+No blocking findings.
+
+1. SIGNIFICANT — §5.3a's empty-results screen (`EmptyQueueState.tsx`)
+   does not consume the shared `ErrorState` component at all; it has its
+   own fully hardcoded copy ("No papers matched...", "Swipe down to try
+   a different search."). Grepped every file under
+   frontend/src/components/screens/ for `ErrorState` usage: only
+   `SearchSettingsPanel.tsx` (§4.3/§4.5) and `ZoteroPushFlow.tsx`
+   (§4.4/§5.5) import it; `EmptyQueueState.tsx` has zero reference to it
+   or to `errorCopy.ts`. BuildPlan.md's own Task 4C line explicitly lists
+   §5.3a as one of the contexts this "shared error-rendering component
+   ... specialized only by copy per context" was meant to cover
+   (BuildPlan.md:634). tester's log (2882-2905) frames this purely as "a
+   coverage gap" (a missing test) and rates it "low risk since ...
+   §5.3a's empty-results state is a distinct SearchSettingsPanel
+   concern" — that framing is itself slightly off (the file in question
+   is `EmptyQueueState.tsx`, a StackScreen-owned component, not
+   SearchSettingsPanel at all) and understates that this isn't a test
+   gap, it's a real wiring gap: a future change to ErrorState's markup,
+   accessibility pattern (e.g. `role="alert"` vs `role="status"`), or
+   copy-resolution logic will not propagate to this screen because it
+   was never plumbed through `getErrorCopy`/`ErrorState` in the first
+   place. That said, current behavior is not visibly broken — the
+   hardcoded copy matches the §5.3a wireframe correctly — so this is an
+   architecture-consistency gap against BuildPlan's stated design, not a
+   user-facing defect today. Recommend either wiring an "empty_results"
+   ErrorContext through ErrorState/errorCopy.ts, or correcting
+   BuildPlan's citation to not claim §5.3a is covered by the shared
+   component (since zero-results is a non-error server response, not a
+   `service_unavailable`/CONTRACTS.md §2-shaped error at all, which is
+   arguably why it was never a natural fit for ErrorState in the first
+   place).
+
+2. MINOR (confirmed-still-open, not new) — `initOfflineSync()` is
+   exported and fully tested but still never called from `main.tsx` or
+   `App.tsx` (confirmed via grep: zero call sites outside
+   offlineSync.ts/offlineSync.test.ts/state/index.ts's re-export). This
+   means the retry-queue-on-reconnect mechanism is currently inert in
+   the running app. tester already flagged this accurately as an open
+   4A/4B handoff blocking Tier 4's overall exit gate, not a 4C defect —
+   independently re-confirmed still true as of this review, no new
+   information, just verifying tester's claim rather than taking it on
+   faith.
+
+3. INFORMATIONAL, not a fix-now issue — `retryQueueStore`'s `items`
+   array has no size cap; a user offline for a long session queuing many
+   actions grows it unboundedly in memory. Low real-world risk given
+   this is a client-side, single-user, in-memory queue that's cleared on
+   reload, but worth noting since nothing currently bounds it.
+
+Verified and found NOT to be problems (actively tried to break each):
+- **§4.5-vs-§13.6 priority race**: `getErrorCopy()` checks `isOffline`
+  before `error.code === "service_unavailable"` unconditionally
+  (errorCopy.ts:42-53), and `isOffline` is read reactively from
+  `networkStore` by the calling component at render time, not captured
+  at request-send time — so even a stale/in-flight request that resolves
+  with a `service_unavailable` body *after* the browser has already gone
+  offline still renders "You're offline" once the offline-triggered
+  re-render happens, because the offline check runs on the *current*
+  store value, not a frozen one. §11.5 also confirms the service worker
+  never caches PubMed/API responses (only the static app shell), so the
+  "stale cached error response" variant of this scenario is architecturally
+  not possible as constructed. `errorCopy.test.ts`'s second test directly
+  asserts the priority claim with a real `service_unavailable` error
+  object present alongside `isOffline: true`. No collapse found.
+- **Retry-queue lost-update under network flapping**: `retryAll()` only
+  removes an item after `await item.run()` resolves without throwing
+  (retryQueueStore.ts:63-71); a network drop mid-retry causes the
+  underlying fetch to reject, which is caught and leaves the item
+  queued — no scenario found where an item is dropped without its retry
+  actually completing. A second `online` event firing mid-drain is a
+  no-op via the `isRetrying` guard (retryQueueStore.ts:59), so no
+  overlapping drain/double-fire race exists either.
+- **Duplicate-enqueue dedup**: `enqueue()` filters out any existing item
+  with the same `id` before appending (retryQueueStore.ts:47-52), so a
+  caller using a stable id (e.g. keyed by pmid/action) gets automatic
+  dedup rather than duplicate retries. (Real double-press behavior
+  ultimately depends on 4A/4B choosing stable ids when they wire real
+  actions in — outside 4C's scope to verify further since nothing calls
+  `enqueue` from a real screen yet, confirmed via grep.)
+- **CookieConsentNotice persistence**: does NOT persist across reload
+  (plain in-memory Zustand store, no `persist` middleware) — but this
+  matches SPEC.md §10.2/§11.7's own wording exactly ("dismissed *this
+  session*", "local UI state... not persisted") word for word, and
+  uiStore.ts's own comment cites this correctly. Verified this is the
+  intended design, not an oversight.
+- **ErrorState XSS surface**: `{title}`/`{message}` are rendered as
+  plain JSX text-node children (ErrorState.tsx:49-50), never via
+  `dangerouslySetInnerHTML` — React's default text-node escaping applies,
+  consistent with the project's established pattern. No injection
+  surface found even under a hypothetical adversarial `error.message`.
+
+Nothing else survived scrutiny beyond the above three items (one
+significant, one confirmed-still-open minor, one informational).
+
+[2026-07-05T03:30:00] TASK 4B REVIEW — START
+Reviewing senior-fullstack-developer's Task 4B (Zotero export wiring)
+against BuildPlan.md:580-586/624-630 and SPEC.md §5.5/§8/§5.4/§9.6,
+CONTRACTS.md §6, per tester's "TASK 4B VERIFY — COMPLETE" entry
+(logs/tester.build.log ~L2991-3305, verdict "CHECKPOINT MET") and
+specialist's PIVOT/COMPLETE entries (logs/senior-fullstack-developer.build.log
+~L326-931). Files read directly: ZoteroCallbackRoute.tsx,
+zoteroCallbackParams.ts, useZoteroPushFlowController.ts, ZoteroPushFlow.tsx,
+ZoteroPushModal.tsx, api/zotero.ts, backend/app/routes/zotero.py
+(_callback_redirect/auth_callback/push_items/disconnect), CONTRACTS.md §6,
+main.tsx (MSW gate), mswBrowser.ts. Focus: OAuth callback param safety,
+retry double-submit, disconnect/push race, token exposure, MSW prod-gating.
+
+[2026-07-05T04:05:00] TASK 4B REVIEW — COMPLETE
+
+Findings (most severe first):
+
+1. SIGNIFICANT — No guard against double-submit on Save/Retry causes real
+   duplicate Zotero pushes. `useZoteroPushFlowController.ts`'s `runPush`
+   (called by both `handleSave` and `handleRetry`) never checks
+   `push.isPending` before calling `push.mutate(...)`, and
+   `ZoteroPushFlow.tsx`'s Save/Retry buttons are never `disabled` while a
+   push mutation is in flight (grepped both files for
+   `isPending`/`isLoading`/`disabled` — zero hits). A user who double-clicks
+   Save (or double-clicks the Step-3b Retry button, e.g. on a slow
+   connection) fires two concurrent `POST /zotero/push` requests with the
+   identical PMID list/collection — the backend (`push_items` in
+   backend/app/routes/zotero.py) has no idempotency key or dedup, so this
+   produces two real duplicate items per PMID in the user's Zotero library,
+   directly contradicting the calm "Saved N papers" success copy. Confirmed
+   this is untested: `useZoteroPushFlowController.test.tsx` has 8 cases,
+   none exercising a second `mutate()` call while the first is pending;
+   `e2e/zoteroPush.msw.spec.ts` has no dblclick/rapid-submit case either.
+   Both the specialist's COMPLETE entry and tester's VERIFY entry describe
+   the partial-failure/retry-scoping logic (which is genuinely correct —
+   `failedPmids` is derived correctly and Retry does resubmit only the
+   right subset, confirmed by reading the code) but neither one checked
+   for a guard against calling that correct logic twice concurrently.
+
+2. SIGNIFICANT — No guard prevents Disconnect Zotero while a push is
+   in-flight, and the frontend loses track of the push outcome once this
+   happens; the backend's push continues to completion regardless.
+   Concrete repro: open the push flow, select a collection, click Save
+   (`push.mutate` in flight), then immediately click Cancel — `onCancel`
+   in `useZoteroPushFlowController.ts` is wired straight to `onClose` with
+   no check on `push.isPending`, so the modal unmounts mid-request. The
+   Saved List panel's "Disconnect Zotero" button (`SavedListPanel.tsx`,
+   wired via `App.tsx`'s `onDisconnectZotero={() => disconnectZotero.mutate()}`)
+   is now reachable and has no guard either. Backend-side,
+   `push_items` (backend/app/routes/zotero.py:327-358) reads and decrypts
+   the connection's token once at request start and proceeds independent
+   of a concurrent `DELETE /zotero/connection` (zotero.py:441-455) — so
+   the already-in-flight push completes and actually writes items into the
+   user's Zotero library even after the connection row is deleted and the
+   UI has told the user they disconnected. This isn't a data-loss bug (the
+   push either succeeds or fails as it would have anyway) but it is a real
+   confusing-state bug the review brief specifically asked about: the user
+   is told "disconnected" while a write to their Zotero account they
+   thought they'd severed is still landing. No focus trap or `aria-hidden`
+   on the background while the push modal is open compounds this for
+   keyboard users (Tab can reach "Disconnect Zotero" without going through
+   Cancel at all). tester's VERIFY entry checked only that "Disconnect
+   Zotero is wired to the real endpoint and reflects confirmed server
+   state" — it did not check concurrent-with-push behavior.
+
+3. MINOR — MSW browser gate (`main.tsx`'s `window.__LITLIST_E2E_USE_MSW__`
+   check) is fine as implemented: it's a runtime `window` global set only
+   via Playwright's `page.addInitScript` before any app JS runs, not an
+   env var baked into the build, and the MSW module is dynamically
+   imported so it isn't bundled into the production chunk regardless.
+   Setting this flag in a real production tab would require already
+   having script-execution ability on the page (devtools/an existing XSS),
+   which is a different, pre-existing threat model, not an "accidentally
+   activates in prod" risk. No finding here — checked and it holds up.
+
+Verified clean (tried to break, could not):
+- OAuth callback param parsing (`zoteroCallbackParams.ts`) degrades
+  correctly for missing/malformed/extra params — anything other than
+  literal `status=success`/`status=error` becomes `"unknown"`, and
+  `result.message`/`result.code` are always rendered as plain React text
+  (never `dangerouslySetInnerHTML`), so an attacker-crafted
+  `?message=<script>...` in the callback URL cannot execute — confirmed by
+  reading `ZoteroCallbackRoute.tsx`'s JSX directly, not just the code
+  comment claiming it.
+- CONTRACTS.md §6's citation checked against both call sites
+  (`_callback_redirect` in backend/app/routes/zotero.py and
+  `parseCallbackParams`/`ZoteroCallbackRoute.tsx`) — the shape genuinely
+  matches field-by-field, and the PIVOT log's account of who moved (backend)
+  is accurate, not a stretched retelling.
+- No Zotero token/secret ever appears in frontend code, Zustand/React
+  state, localStorage, or sessionStorage — grepped
+  `frontend/src` for `oauth_token`/`access_token`/`token_secret`, zero
+  hits; `api/zotero.ts`'s hooks only ever pass session-cookie-authenticated
+  requests through `apiFetch`, never a raw token.
+- Session-fixation fix in `auth_callback` (backend/app/routes/zotero.py)
+  is real and matches §9.1: the `ZoteroConnection` insert and
+  `rotate_session` are one atomic commit (confirmed by reading the
+  transaction structure, not just the docstring's claim), closing the
+  exact window a prior adversarial pass had flagged.
+
+Verdict: two SIGNIFICANT findings (duplicate-push-on-double-submit; no
+guard against Disconnect/Cancel racing an in-flight push), neither
+BLOCKING (both require a specific, reachable-but-not-default user action
+sequence, and neither leaks credentials or breaks the core success path).
+Reporting both back to senior-fullstack-developer for a fix (disable
+Save/Retry while `push.isPending`; either block Cancel/Disconnect while a
+push mutation is pending, or make the push mutation abortable/cancelled on
+modal close) rather than patching directly.
+
+[2026-07-05T04:10:00] TASK 4A REVIEW — START
+Independent adversarial re-review of Task 4A (core loop wiring) per
+BuildPlan.md §11.4/§15.10 checkpoint pattern (lines 580-622), following
+up on tester's TASK 4A VERIFY + TASK 4A RE-VERIFY (both clean after the
+ErrorState/offline wiring gap was found and fixed) and
+senior-fullstack-developer.build.log's TASK 4A START/PIVOT/COMPLETE
+entries. Read App.tsx, useSwipeToDecide.ts, StackScreen.tsx, main.tsx,
+usePlaybackEngine.ts, playbackStore.ts, decisions.ts, CONTRACTS.md §5,
+api/types.ts, and backend/app/routes/{search,saved,decisions}.py
+directly rather than trusting either log's self-report. Re-ran
+`npx tsc -b --noEmit` twice independently (clean both times) as a
+spot-check of the flakiness tester flagged.
+
+[2026-07-05T04:55:00] TASK 4A REVIEW — COMPLETE
+
+FINDING 1 — BLOCKING: mid-narration decisions never call
+`speechSynthesis.cancel()`, directly violating SPEC.md §6.6's explicit
+hard requirement ("Swiping must call `speechSynthesis.cancel()`
+immediately ... This must happen synchronously with the swipe handler
+so there is no audible overlap between papers"). Verified by reading
+`App.tsx`'s `decide()` closure end to end and grepping the whole
+`frontend/src` tree for `engine.cancel`/`.cancel(`: the only call sites
+of `usePlaybackEngine`'s `cancel()` are inside the hook's own
+implementation (pause/unmount-cleanup) — `App.tsx` never calls it.
+`decide()` calls `playback.resetForNewPaper()` (a Zustand store method)
+which only flips `isPlaying`/`highlightedSegmentIndex` to
+false/null — it does not touch the actual `SpeechSynthesisUtterance`
+in flight inside `usePlaybackEngine`, which is a *separate* module
+holding its own `statusRef`/`generationRef`/`currentUtteranceRef`
+(confirmed by reading `usePlaybackEngine.ts` and `state/
+playbackStore.ts` together). Concrete failure sequence: user swipes/taps
+a decision while the current paper's abstract is still being narrated.
+`decide()` fires the PATCH + optimistic queue update; `currentItem`
+advances to the next paper next render, so the `items` `useMemo` swaps
+to the new paper's `[title, metadata, ...segments]` and `itemsRef.
+current` is overwritten via the hook's own `useEffect([items])` —
+*while the old paper's browser-native utterance is still speaking,
+uninterrupted*. When that stale utterance's real `onend` eventually
+fires, the `generation !== generationRef.current` guard does **not**
+catch it (generation is only bumped by `play()`/`pause()`/`cancel()`,
+none of which `decide()` calls), so `scheduleGap(index + 1, generation)`
+runs and reads `itemsRef.current` — now the *new* paper's item list —
+at an index carried over from the *old* paper. This produces either (a)
+audible overlap/wrong-paper narration (SPEC's own named failure mode),
+(b) playback jumping into the middle of the new paper's segments
+(desyncing the sentence highlight from what's actually spoken, contra
+§6.5), or (c) an out-of-bounds index immediately calling `finish()` for
+the new paper the user hasn't heard at all, firing an unwanted
+auto-decide (`onFinished` -> `decide(newPmid, defaultSwipeBehavior,
+"auto")`) before the user ever interacted with that card. Also a
+secondary, related desync: `resetForNewPaper()`'s direct write to
+`playback.isPlaying` violates this codebase's own documented invariant
+(App.tsx's and playbackStore.ts's own comments: "the engine stays the
+one source of truth for *whether* narration is playing; the store is a
+read-only reflection ... never an independently toggled duplicate") —
+here the store is toggled directly, out of band from the engine's real
+`status`, so the play/pause button and highlight can show "stopped"
+while the engine is still actually speaking. Confirmed zero test
+coverage of this path anywhere (grepped all `*.test.ts*` for `cancel(`
+outside `usePlaybackEngine.test.ts` itself — no hit in `App.test.tsx`
+or any StackScreen-level test), so this was never exercised, not just
+untested-but-passing. This is the specific "swipe cancellation" case
+SPEC.md calls a hard requirement, not a style nicety, and it sits
+squarely inside this task's own core-loop scope (§11.4's decision
+function + §11.3's playback module handoff) — not an adjacent task's
+responsibility. Neither the specialist's COMPLETE entry, its
+post-verification PIVOT, nor either of tester's two VERIFY passes
+mention checking for a `cancel()` call at the decision site.
+
+FINDING 2 — SIGNIFICANT: the gesture hook's own `disabled` mechanism
+(explicitly built and unit-tested to prevent "a fast double-swipe
+firing two decisions for the same paper," per `useSwipeToDecide.ts`'s
+own doc comment on the `disabled` option) is never wired anywhere in
+the actual composition. Verified: `StackScreen.tsx` calls
+`useSwipeToDecide({ onDecide })` with no second argument, and
+`StackScreen`'s own props interface has no `disabled`/`isPending` prop
+for `App.tsx` to pass `updateDecision.isPending` through — grepped both
+files for `disabled`/`isPending` and found the only reference is inside
+`useSwipeToDecide.test.ts`'s isolated unit test of the hook itself, not
+its real caller. Concrete failure: two `ArrowRight`/`ArrowLeft`
+keydown events fired close enough together that no re-render has yet
+advanced `currentItem` (real OS key-repeat after the initial ~500ms
+delay fires at ~20-30/s; two fast manual keypresses, or two fast taps of
+the Interested/Skip buttons, reach the same window) both read the same
+stale `currentItem` closure and both call `decide(pmid, decision,
+"swipe")` for the *same* pmid. Traced `useUpdateDecision`'s `onMutate`
+(`decisions.ts`) for the actual consequence: since `onMutate` is async
+and its first statement is `await queryClient.cancelQueries(...)`, two
+back-to-back synchronous `mutate()` calls both start executing before
+either resolves, so the *second* call's `previousQueue` snapshot is
+taken *after* the first call's optimistic write has already landed
+(each `onMutate` resumes in turn) — meaning if the *first* PATCH later
+fails, its `onError` rollback restores the pre-decision `previousQueue`
+snapshot and **overwrites the second (successful) call's optimistic
+decision**, transiently showing the item as `pending` again in the UI
+even though the server has already recorded the second call's decision
+as final; this self-heals once `onSettled`'s `invalidateQueries` runs,
+but produces a real, visible incorrect intermediate state. More
+importantly, verified against the actual backend
+(`backend/app/routes/decisions.py`'s `update_decision`): the PATCH
+handler unconditionally overwrites `decision_row.decision` with
+whatever the current request's body says, with no optimistic-locking or
+"already decided" check — so if the two racing requests are received
+out of order (plausible under real network conditions, not just
+localhost), the *server's* final recorded decision for that pmid may
+not match the *user's actual last keypress*, silently. This is exactly
+the class of race the task's own review brief asked to be checked for.
+
+FINDING 3 — MINOR (already surfaced by tester, independently
+re-confirmed rather than newly found): `npm run build`'s `tsc -b`
+step's TS6133 false positives are a genuine incremental-build-cache
+bug, not a real unused-import problem — re-ran `npx tsc -b --noEmit`
+twice independently just now, both clean, consistent with tester's
+"6/8 clean without cache-clear, 5/5 clean with --force" characterization
+rather than a code defect. Confirmed the project's own
+`tsconfig.app.json`/`tsconfig.node.json` both set `noUnusedLocals`/
+`noUnusedParameters: true` under `incremental` project-reference builds
+via `tsBuildInfoFile` — this combination (unused-locals/parameters
+checks plus an incremental `.tsbuildinfo` cache under composite/project
+references) is a known category of upstream TypeScript flakiness, so
+tester's read (real tooling bug, not masking a live dead-code issue
+today, since `--force` and `eslint`'s independent unused-vars check
+both come back clean) holds up. Worth the CI fix tester recommended
+(pin a tsc version confirmed not to hit this, or run `tsc -b --force`/
+disable incremental in the build script) so a future *real* unused
+import doesn't get reflexively dismissed as "the known flake."
+
+Item checked and found clean: CONTRACTS.md §5 vs. the live backend
+today — read `search.py`'s `QueueItem`/`QueueResponse`/
+`SearchSettingsResponse` and `saved.py`'s `SavedItem`/
+`SavedListResponse` field-by-field against CONTRACTS.md §5 and
+`frontend/src/api/types.ts`: exact match on every field name, type, and
+optionality on both sides, today, independently re-verified (not just
+at the time 4A wrote the fix). Broadened the consumer grep beyond `.
+paper.`/`authors[]`/`decided_at` to `read_aloud_fields`/`all_authors`/
+`publication_types` — no live reference to any old shape remains
+anywhere in `frontend/src` outside of comments explaining the fix.
+`usePlaybackEngine`'s handling of a zero-segment abstract: traced
+`playItem`/`scheduleGap` — an empty-`segments` paper still has a
+non-empty `items` array (title + metadata line), and `finish()` fires
+cleanly via the ordinary `index >= currentItems.length` bound check
+with no error/hang; this path is unaffected by Finding 1's cancel()
+gap (Finding 1 is about the *previous* paper's leftover utterance, not
+this one running out of content).
+
+Severity ranking: Finding 1 (BLOCKING — explicit SPEC.md §6.6 hard
+requirement violated, zero test coverage, inside this task's own
+scope) > Finding 2 (SIGNIFICANT — real, reachable, server-confirmed
+race that the hook's own author built and tested a guard for but never
+wired up) > Finding 3 (MINOR — tooling flake, already flagged by
+tester, independently reconfirmed, actionable fix path exists).
+Reported to senior-fullstack-developer / coordinator for Task 4A
+re-dispatch; not a "nothing survived scrutiny" outcome.
+
+[2026-07-05T09:50:00] TASK 4A BLOCKING-FIX RE-REVIEW — START
+Independently re-attempting the original BLOCKING (decide() never called
+usePlaybackEngine's real cancel()) and SIGNIFICANT (useSwipeToDecide's
+disabled re-entrancy guard was dead code) attacks against the current
+code, per the coordinator's request, without taking senior-fullstack-
+developer's PIVOT entry or tester's "TASK 4A BLOCKING-FIX VERIFY" verdict
+on faith. Read frontend/src/App.tsx (decide()/decideRef/engine wiring),
+frontend/src/playback/usePlaybackEngine.ts (cancel()), frontend/src/
+gestures/useSwipeToDecide.ts (hasDecidedRef), frontend/src/components/
+screens/StackScreen.tsx (isDecisionPending/key wiring), and all three
+affected test files directly.
+
+[2026-07-05T10:10:00] TASK 4A BLOCKING-FIX RE-REVIEW — COMPLETE
+
+**1. BLOCKING finding (cancel() never called) — CLOSED, verified genuine.**
+`App.tsx`'s `decide()` (lines 233-246) calls `engine.cancel()` as its
+literal first statement, unconditionally, before `updateDecision.mutate`.
+`usePlaybackEngine.ts`'s `cancel()` (lines 351-360) is a real
+implementation, not a store-only flip: it bumps `generationRef.current`
+first, clears any pending fallback timer, calls the actual
+`envRef.current.synth?.cancel()` (the real `speechSynthesis.cancel()`
+in production), nulls the utterance ref, releases the wake lock, and
+resets `indexRef`/status/currentItem. I specifically tried the "Web
+Speech `cancel()` is itself async/unreliable" variant asked for: every
+`onend`/`onerror`/timer callback captures its own `generation` value at
+schedule time and checks it against `generationRef.current` before doing
+anything (`playItem`, `scheduleGap`, both fallback-timer branches) —
+since `cancel()` bumps the counter *before* calling the real
+`synth.cancel()`, a stale utterance event firing after `cancel()`
+returns (even arbitrarily late, on an engine that doesn't stop
+synchronously) is provably a no-op: the generation comparison fails
+regardless of *when* the native cancel actually takes effect. This
+closes the exact "queued utterance fires after cancel() returns" gap
+the coordinator asked me to probe for — the guard is generation-based,
+not synchronicity-based, so it doesn't depend on the DOM API's own
+cancel() being instantaneous.
+I independently reproduced non-vacuousness myself (not relying on
+tester's revert-restore, did my own): commented out the `engine.cancel()`
+call in `App.tsx`, ran `npx vitest run src/App.test.tsx` from
+`frontend/` — both new tests in the "mid-narration decisions call the
+playback engine's cancel()" describe block failed exactly as expected
+(0 calls instead of 1). Restored via `git diff`/manual patch reversal,
+re-ran — clean again, confirmed via `git status`/`git diff` showing no
+residual change to the file.
+One test-hygiene nit (MINOR, not a functional bug): `App.test.tsx`'s
+second test in that describe block is literally titled "does not call
+cancel() when a decision is made while nothing is playing" but its own
+assertion is `expect(cancelSpy).toHaveBeenCalledTimes(1)` — i.e. it
+actually asserts cancel() IS called once, unconditionally, regardless of
+status. The test body and inline comment correctly explain the real
+(correct) behavior — cancel() fires unconditionally, which is the
+right, simpler invariant — but the `it(...)` title contradicts its own
+assertion and would mislead a future reader skimming test names. Not a
+production or coverage defect, just a stale/wrong test description.
+
+**2. SIGNIFICANT finding (dead re-entrancy guard) — CLOSED, verified
+genuine.** `useSwipeToDecide.ts`'s `hasDecidedRef` (line 66) is a plain
+`useRef(false)`, checked and set synchronously as the first two lines of
+`commitExit` (lines 70-71), before `onDecide` fires — this is a ref
+write, not a `setState`, so it has no render-cycle dependency and closes
+the same-tick race that a `disabled`/`isPending` React-state check alone
+cannot. `StackScreen.tsx` genuinely threads a real `isDecisionPending?:
+boolean` prop into `useSwipeToDecide({ onDecide, disabled:
+isDecisionPending })`, and `App.tsx` passes `updateDecision.isPending`
+into it plus `key={currentItem.pmid}` on `<StackScreen>` so each card
+gets a fresh guard instance. I tried the specific bypass the coordinator
+asked about — "could the ref be reset by some other code path (a
+re-render, a prop change, an effect cleanup) between two decisions
+despite `key={pmid}`" — and found no such path: `hasDecidedRef` is a
+`useRef`, untouched by any effect or re-render in the file; the only way
+it resets is a full unmount/remount of the `useSwipeToDecide` instance,
+which only happens via `StackScreen`'s `key` changing (i.e. a genuinely
+new card), not from any prop change on the same instance. I independently
+reproduced non-vacuousness myself: commented out the guard's two lines in
+`commitExit`, ran `npx vitest run src/gestures/useSwipeToDecide.test.ts
+src/components/screens/StackScreen.test.tsx` from `frontend/` — 4 tests
+failed exactly as expected (two rapid `triggerDecision` calls both fired,
+a drag-commit+tap both fired, a StackScreen keydown after a tap-decision
+fired a second `onDecide`). Restored the two guard lines by hand (the
+gestures/ directory is untracked so `git checkout` couldn't restore it —
+patched it back manually), re-ran — 17/17 clean again, confirmed via
+`grep` that the guard lines are back verbatim and via a fresh test run.
+
+**3. Scrutiny of the 3 rewritten same-call-shape tests — independently
+assessed, no coverage loss found.** Read `useSwipeToDecide.test.ts`'s
+two rewritten tests and `StackScreen.test.tsx`'s one rewritten test
+directly (not just tester's description of them). Each of the three
+input methods (drag, tap, keyboard) now gets its own fresh
+`renderHook`/`render` instance instead of reusing one instance
+sequentially — this is a structurally necessary consequence of the new
+guard (a single instance can, by design, only ever commit one decision,
+so the old "swipe then tap then keyboard on the same instance" pattern
+is now permanently impossible to pass, regardless of implementation
+detail) and matches the real composition (`App.tsx` really does mount a
+fresh `StackScreen` per `key={pmid}`, confirmed by reading the JSX
+directly). The rewritten tests still assert the identical original
+claim (all three input methods produce the same `onDecide` call shape,
+differing only in `source`), and a separate, additional describe block
+("re-entrancy: a single instance never commits a second decision" /
+StackScreen's dedicated re-entrancy + isDecisionPending tests) now
+explicitly covers the single-instance-multiple-attempts case, which the
+old tests never actually exercised (the guard didn't exist yet, so nothing
+was being protected against). No coverage was lost; a new,
+previously-absent case was added. Confirmed the StackScreen keydown
+listener rewrite is not leaking cross-render listeners: `StackScreen.tsx`
+attaches/detaches via `document.addEventListener`/`removeEventListener`
+inside a `useEffect` cleanup, and the rewritten test calls `.unmount()`
+between all but the final render, so there's no duplicate-listener
+cross-talk.
+
+**Verdict:** Both the original BLOCKING and SIGNIFICANT findings are
+genuinely CLOSED in the current code — confirmed by my own independent
+reading and my own from-scratch revert/reproduce/restore experiments on
+both `App.tsx` and `useSwipeToDecide.ts` (not accepted on senior-
+fullstack-developer's log or tester's verdict alone). I found no new
+bypass in either the async-cancel()-unreliability angle or the
+key-remount re-entrancy angle the coordinator specifically asked me to
+probe. One MINOR test-hygiene nit found (a misleadingly-titled test in
+`App.test.tsx`, described above) — not blocking, not a functional or
+coverage defect, just worth a one-line title fix whenever the file is
+next touched.
+
+Task 4A is clear to close from my perspective. Tier 4 (4A/4B/4C): I did
+not re-review 4B/4C's own substance in this pass (out of scope for this
+request — 4B's coverage-gap PIVOT/fix was read only to confirm it didn't
+touch 4A's files, which it doesn't), but nothing found here blocks moving
+Tier 4 toward final merge on the 4A axis specifically.
