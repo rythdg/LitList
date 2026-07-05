@@ -293,3 +293,31 @@ This session's Tier 4 batching (holding 3 tasks' worth of work
 uncommitted while multiple agents ran destructive revert/restore
 verification cycles on shared files) is exactly the condition that let
 this incident happen. All of Tier 4 is now committed (main@1dd8816).
+
+[2026-07-05] Sec15.6 offline follow-up - FULLY CLOSED, Tier 4 DONE
+Closed the last open Tier 4 item (Playwright offline-emulation tests,
+deferred from Task 4C since App.tsx/Playwright didn't exist yet).
+While implementing, found a real production bug that had nothing to
+do with the missing test: retryQueueStore.enqueue() had ZERO
+production callers anywhere - the offline-retry feature built and
+unit-tested back in Task 4C never actually fired for any real user
+action. Fixed by wiring useUpdateDecision to enqueue on network-level
+failure. Adversarial review then found two more real gaps in that new
+wiring: (1) the retry loop couldn't distinguish a transient network
+failure from a genuine permanent error on retry, risking an invisible
+infinite retry loop for a decision that would never actually succeed;
+(2) no UI anywhere showed a decision was still pending vs. saved -
+indistinguishable to the user. Fixing these surfaced a THIRD bug while
+investigating: TanStack Query's own built-in networkMode:"online"
+mutation-pause was silently competing with the custom retry queue for
+the same browser online/offline events, meaning the original
+"retries on reconnect" test was passing for the WRONG reason. Fixed
+with networkMode:"always" project-wide, then specifically re-verified
+against Task 4B's already-closed Zotero double-submit/disconnect-race
+guards to confirm no regression (24 Zotero tests re-run green, plus an
+ad hoc real-offline-event scratch check).
+This chain - test gap -> missing wiring -> incomplete fix -> a third,
+unrelated bug surfacing from investigating the second - is exactly why
+this project never treats "tests pass" as sufficient on its own.
+Tier 4 (4A, 4B, 4C, plus this follow-up) is now FULLY AND FINALLY
+CLOSED. Final: 213/213 backend, 171/171 frontend, 14/14 Playwright.

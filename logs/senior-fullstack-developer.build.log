@@ -1404,3 +1404,338 @@ rather than leaving it as long-lived uncommitted state, which is
 presumably how this was lost in the first place. Told the coordinator
 this is now restored and verified so they can commit before anything
 else touches this tree.
+
+[2026-07-05T09:00:00] TASK 4C FOLLOW-UP: SEC15.6 OFFLINE E2E — START
+Closing the deferred §15.6 item from Task 4C (BuildPlan.md lines
+632-646): "Playwright network-offline emulation — cached shell loads,
+in-progress session doesn't crash, queued actions retried on reconnect;
+separate test asserting the external-downtime message appears while the
+app correctly reports itself as online." Read BuildPlan.md's Task 4C
+brief, SPEC.md §4.5, §11.5, §11.7, §13.6, §15.6, §15.3. Seam: the real
+`App.tsx` (4A/4B/4C wiring, now merged) plus the already-built-but-
+previously-unwired `state/networkStore.ts`/`state/offlineSync.ts`/
+`state/retryQueueStore.ts`, exercised end-to-end via new specs in
+`frontend/e2e/` following the 3 existing MSW-backed specs' conventions
+(`frontend/e2e/support/mswBrowser.ts`).
+
+Read the tail of both senior-backend-developer.build.log and
+senior-frontend-developer.build.log per instructions: most recent
+frontend entries cover Task 4B's App.tsx incident-recovery (file was
+reconstructed from session context after being found reset to the Tier
+0 placeholder) and coverage-gap closures — no PIVOT entries there
+conflict with this task's premise. Backend log's tail is Task 3D's
+rate-limiter/CSRF hardening, not directly relevant to this seam.
+
+Before writing tests, audited the actual production wiring `retryAll()`
+depends on: `grep`'d for any real call to `retryQueueStore.enqueue(...)`
+across `src/` and found none outside tests — nothing in `App.tsx`,
+`api/decisions.ts`, or the Zotero push flow ever hands a failed action
+to the retry queue. So "queued actions retried on reconnect" was, as of
+this session, an unused mechanism with no producer wiring it up, not
+just a missing test. Flagging this now (before implementing) rather
+than silently discovering it mid-test: this is a real gap in Task 4C's
+own build scope (not just its deferred test), and closing it requires a
+small, scoped production change to `api/decisions.ts` (the natural
+candidate, since decisions have no manual "Retry" UI unlike the Zotero
+push flow's existing failure-step Retry button) in addition to the
+Playwright specs themselves. Proceeding to wire `useUpdateDecision`'s
+`onError` to enqueue a retry via `retryQueueStore` when the failure is a
+network-level one (fetch itself rejected, not a returned `ApiError`),
+then writing the offline-emulation specs against that real path.
+
+[2026-07-05T09:35:00] TASK 4C FOLLOW-UP: SEC15.6 OFFLINE E2E — PIVOT (production wiring gap, not just a test gap)
+As flagged in the START entry: closing §15.6's "queued actions...
+retried on reconnect" bullet required real production code, not only a
+test. `state/retryQueueStore.ts`/`state/offlineSync.ts` (Task 4C) were
+fully built and unit-tested in isolation but had exactly one caller
+(`main.tsx`'s `initOfflineSync()`) and zero producers — nothing in
+`App.tsx` or any `api/` hook ever called `retryQueueStore.enqueue(...)`.
+This was a real, unfinished piece of Task 4C's own scope (not a
+"deferred to 4C follow-up" item — BuildPlan.md's Task 4C line explicitly
+lists "automatic retry on reconnect" as in-scope), surfaced only now
+because writing the real (non-mocked) §15.6 test forced exercising the
+actual reconnect path end-to-end.
+
+Fix: wired `api/decisions.ts`'s `useUpdateDecision` (chosen because,
+unlike the Zotero push flow, it has no manual "Retry" UI of its own, so
+silent automatic retry is the only sensible behavior for it) to
+distinguish two failure modes in `onError`: a real `ApiError` (request
+reached the server, got a real rejection) still rolls the optimistic
+queue update back exactly as before; a network-level failure (`fetch`
+itself rejected, so no `ApiError` was ever constructed — the actual
+§4.5 "offline mid-session" case) now keeps the optimistic decision and
+hands the same request to `retryQueueStore.enqueue(...)` instead,
+keyed `decision-${pmid}`, so `offlineSync.ts`'s existing real `online`
+listener replays it automatically. `onSettled` was correspondingly
+changed to skip its post-mutation `invalidateQueries` when the mutation
+is queued for retry, since invalidating while still offline would just
+trigger another doomed refetch and thrash the optimistic cache before
+reconnect actually happens.
+
+Also hit and fixed a test-writing pitfall (not a production bug) while
+building the new `api/decisions.test.tsx` cases: reading two separate
+`renderHook()` results (one for `useQueue()`, one for `useUpdateDecision()`)
+against the same `QueryClient` and asserting cross-hook state
+immediately after a `waitFor` on one of them raced — confirmed via a
+`QueryCache.subscribe` trace that the cache itself correctly held
+`"interested"` the whole time (production code was right), but the
+*other* `renderHook`'s own React root hadn't re-rendered to reflect it
+by read time, even inside a second wrapping `waitFor`. Root-caused this
+to cross-root `act()` flush ordering between two independent
+`renderHook` calls, not fixable by more `waitFor` wrapping alone;
+switched to a single combined `renderHook(() => ({ queue: useQueue(),
+decision: useUpdateDecision() }))` for the two new tests, which resolved
+it deterministically (confirmed clean across 5 repeated runs). Left the
+file's two pre-existing tests as they were (still separate-root, still
+reliably passing there since their own write/read timing doesn't hit
+the same race) rather than changing working code.
+
+[2026-07-05T09:40:00] TASK 4C FOLLOW-UP: SEC15.6 OFFLINE E2E — COMPLETE
+Did: closed BuildPlan.md's deferred §15.6 item across both the seam's
+production wiring (see PIVOT above) and 4 new Playwright specs
+(2 files), following the 3 existing `.msw.spec.ts` files' conventions.
+
+- `frontend/e2e/offlineShell.spec.ts` (no MSW): real `context.setOffline(true)`
+  + reload against the real `vite-plugin-pwa`-generated `dist/sw.js` —
+  confirms the app shell (§11.5, JS/CSS/HTML/icons only, never PubMed
+  data) still loads with zero network. Waits for
+  `navigator.serviceWorker.controller` before going offline (workbox's
+  `skipWaiting`/`clientsClaim`, already enabled via `registerType:
+  'autoUpdate'`, Task 2A) rather than assuming a second reload is
+  needed.
+- `frontend/e2e/offlineSession.msw.spec.ts` (MSW-backed, 2 tests):
+  "doesn't crash mid-session" (dispatches a real `offline` window event,
+  decides via tap while the mocked `PATCH /decisions` is forced to fail
+  the way a real offline `fetch()` would, asserts the queue still
+  advances locally with zero `pageerror` events) and "queued decision is
+  retried and actually reaches the server on reconnect" (asserts the
+  Saved List's real server-derived count is `(0)` before reconnect and
+  `(1)` after a bare `online` event with no other action in between —
+  proof the retry was automatic, not test-driven).
+- `frontend/e2e/externalDowntime.msw.spec.ts` (MSW-backed, 1 test): a
+  mocked `service_unavailable` `POST /search` response renders the
+  §13.6 "Temporarily unavailable" `ErrorState` copy, not §4.5's "You're
+  offline" — and separately confirms `navigator.onLine` was never
+  touched by this test at all, so the app has no excuse to have
+  misread this as offline. This is the same distinction Task 4C's
+  adversarial review confirmed at the unit level (`errorCopy.ts`); this
+  proves it holds through the real running app too.
+- `frontend/e2e/support/mswBrowser.ts`: added `setDecisionNetworkDown`
+  (live `page.evaluate` toggle, since `useZoteroPushMode`'s pattern of a
+  pre-nav-only `addInitScript` flag can't flip connectivity *mid*-session),
+  `useSearchServiceUnavailable`, and `dispatchConnectivityEvent`.
+  Documented explicitly in both this file and `e2eHandlers.ts` why these
+  specs don't use `context.setOffline` for the MSW-backed cases: MSW's
+  browser worker answers intercepted `fetch`s entirely within the
+  Service Worker without a real network round-trip, so Chromium's
+  CDP-level offline emulation has no effect on an MSW-mocked response —
+  confirmed this empirically (traced every `request`/`requestfailed`/
+  `requestfinished` event across a full journey; a normal MSW-mocked
+  response fires them, an `HttpResponse.error()`-simulated one does not,
+  which is also why the offline-retry spec verifies success via the
+  real `GET /saved` response instead of a request-count assertion).
+- `frontend/src/api/mocks/e2eHandlers.ts`: added `isDecisionNetworkDown`
+  (read fresh per-request, unlike the module-init-time
+  `zoteroConnected`/`zoteroPushMode` flags, since it needs to flip mid-test)
+  gating `PATCH /decisions/:pmid`, and `isSearchServiceDown` gating
+  `POST /search` with CONTRACTS.md §2's real `service_unavailable` shape.
+- `frontend/src/api/decisions.ts` + `frontend/src/api/decisions.test.tsx`:
+  the retry-queue wiring described in the PIVOT entry above, plus 2 new
+  unit tests (network failure keeps the optimistic decision and enqueues
+  it; `retryQueueStore.retryAll()` — the exact function
+  `offlineSync.ts`'s real `online` listener calls — actually replays it
+  and it succeeds).
+
+Worked (full check suite, actual results):
+- `npx vitest run` (frontend) => 33 files / 161 tests passed (up from
+  156 — 5 net new: 2 in `decisions.test.tsx` directly, no changes needed
+  elsewhere since no other consumer of `useUpdateDecision` needed
+  updating). Re-ran 5x for the 2 new tests specifically — stable.
+- `npx tsc -b --noEmit` => clean.
+- `npx eslint . --max-warnings 0` => clean.
+- `npm run build` => clean production build, `dist/sw.js` +
+  `manifest.webmanifest` generated (16 precache entries).
+- `npx playwright test` => 12/12 passed (8 pre-existing — happyPath,
+  2x dragGesture, 5x zoteroPush — confirmed still green/unchanged, plus
+  this task's 4 new specs across the 3 new files). Re-ran the full
+  Playwright suite 3x total — stable every time, no flakes observed.
+- Backend `pytest -q` => 213 passed (untouched by this task, confirmed
+  no regression from the frontend-only changes).
+
+Changed: frontend/src/api/decisions.ts, frontend/src/api/decisions.test.tsx,
+frontend/src/api/mocks/e2eHandlers.ts, frontend/e2e/support/mswBrowser.ts,
+frontend/e2e/offlineShell.spec.ts (new), frontend/e2e/offlineSession.msw.spec.ts
+(new), frontend/e2e/externalDowntime.msw.spec.ts (new).
+
+Open: none for this task. The only thing worth flagging forward: the
+Zotero push flow still has no automatic retry-queue wiring of its own
+(it relies entirely on its existing manual "Retry" button per §5.5's
+failure step) — this was a deliberate scope choice (SPEC.md §4.5 point 4
+says "may be retried," not "must," and Zotero push already has a manual
+affordance decisions never had), not an oversight, but noting it here in
+case a future task wants automatic retry there too.
+
+[2026-07-05T10:05:00] TASK 4C SEC15.6 FOLLOW-UP REVIEW FIXES — START
+Coordinator relayed adversarial review Findings 1/2 (logs/adversarial-generalist.build.log,
+"TASK 4C SEC15.6 FOLLOW-UP REVIEW"): (1) `retryQueueStore.retryAll()`
+can't distinguish a transient network failure from a genuine `ApiError`
+on a *retried* attempt, so a decision that becomes permanently
+un-saveable after being queued (session expiry, deleted paper, etc.)
+retries forever, invisibly; (2) nothing in the UI reads
+`retryQueueStore` at all, so a decision stuck in that loop looks
+identical to a successfully-saved one, indefinitely. Both against
+`frontend/src/state/retryQueueStore.ts` and `frontend/src/api/decisions.ts`
+(same seam as the original follow-up), plus a new UI surface.
+
+[2026-07-05T10:20:00] TASK 4C SEC15.6 FOLLOW-UP REVIEW FIXES — PIVOT (discovered a second, competing offline mechanism)
+While writing the real-browser Playwright coverage for Finding 1 (an
+`ApiError` on the *retried* attempt), the new tests failed in a way that
+proved `retryQueueStore.enqueue()` was never being called at all in the
+real app, even though the equivalent Vitest unit tests for the exact
+same logic passed cleanly. Root-caused via a temporary `console.log` in
+`PendingRetryBanner` plus reading the actual rendered DOM: TanStack
+Query's default `networkMode: "online"` makes a mutation *pause*
+(`mutationFn` never runs, so `onError` never fires) whenever its own
+built-in `onlineManager` believes the browser is offline — and
+`onlineManager` listens to the exact same real `window` `online`/
+`offline` events `state/offlineSync.ts` does. My Playwright specs
+dispatch those same events (to drive `offlineSync.ts`/`networkStore.ts`
+for real, per the earlier follow-up's own design) — which meant every
+`setDecisionNetworkDown`+`dispatchConnectivityEvent(page, "offline")`
+combination was *also*, invisibly, being intercepted by TanStack
+Query's own pause/auto-resume-on-reconnect mechanism, which retried the
+identical mutation itself once 'online' fired and silently succeeded —
+completely bypassing `retryQueueStore` in the real browser the whole
+time. The Vitest unit tests never hit this because they only call
+`HttpResponse.error()` directly against `navigator.onLine`, which stays
+`true` throughout jsdom tests that never dispatch a real
+`online`/`offline` event, so `onlineManager` never believed it was
+offline there.
+
+This means the original SEC15.6 follow-up's Playwright reconnect-retry
+test ("a decision queued while offline is retried and actually reaches
+the server once the app reconnects") was *not* actually exercising
+`retryQueueStore` in the real browser the way its own comments claimed
+— it was passing for the right *visible* outcome (Saved List eventually
+shows the paper) but via TanStack Query's own competing built-in
+mechanism, not the one this project built and is now trying to make
+correct (ApiError-vs-network distinction, pending/failed UI surfacing).
+Two independent, undeclared-to-each-other mechanisms reacting to the
+same signal is exactly the kind of "same fact owned twice" problem
+§11.2 warns against, and it's why Finding 1/2's fix appeared to do
+nothing when first tested end-to-end.
+
+Fix: set `mutations: { networkMode: "always" }` in the one real
+`api/queryClient.ts` (and mirrored in `api/testUtils.tsx`'s test
+QueryClient, for parity) — a mutation now always actually attempts its
+real network call regardless of `onlineManager`'s own belief about
+connectivity, so `retryQueueStore` is restored as the single,
+authoritative mechanism for what happens to a failed mutation. Queries
+intentionally keep the default `networkMode` (pausing an in-flight read
+while offline is harmless/arguably correct; only mutations have a
+side-effecting retry story this app needs to own itself, and no test —
+old or new — depends on query-level pausing). After this change, the
+Finding 1/2 Playwright tests actually exercise `retryQueueStore.enqueue`/
+`retryAll`/the new `PermanentRetryFailure` path for real, and the
+previously-passing reconnect-retry test continues to pass for the
+*correct* reason now (confirmed by re-running the full offline-session
+suite after the fix — all 4 tests green, including the two new ones).
+
+[2026-07-05T10:30:00] TASK 4C SEC15.6 FOLLOW-UP REVIEW FIXES — COMPLETE
+Did (both findings, plus the networkMode discovery above):
+
+**Finding 1 (retryAll can't tell transient vs. permanent failure):**
+- `frontend/src/state/retryQueueStore.ts`: added `PermanentRetryFailure`
+  (a plain marker `Error` subclass — the store still never imports
+  `ApiError`/any domain-specific shape, staying generic per its own
+  design) and `failedItems: FailedRetryItem[]`. `retryAll()`'s catch
+  now checks `error instanceof PermanentRetryFailure`: if so, the item
+  is removed from `items` and moved into `failedItems` (real failure,
+  no more retries); any other rejection (a genuine network-level
+  failure) is left queued exactly as before. Added an informational
+  comment on `remove()` about the id-based-removal race the reviewer
+  flagged as not-currently-reachable-but-worth-noting for future
+  producers, per the coordinator's "no action needed, comment only"
+  guidance.
+- `frontend/src/api/decisions.ts`: the queued retry's `run()` now
+  translates a real `ApiError` from the *retried* `performDecision`
+  call into `PermanentRetryFailure` (with the server's own message),
+  and re-throws any other rejection unchanged — so a session-expired/
+  paper-deleted/etc. condition discovered only on retry now correctly
+  gives up instead of looping forever.
+
+**Finding 2 (no user-visible pending/failed signal):**
+- `frontend/src/components/PendingRetryBanner.tsx` (new): a minimal,
+  always-mounted strip (same pattern as `CookieConsentNotice`, per the
+  coordinator's suggestion to check that existing pattern) reading
+  `retryQueueStore` directly — "N change(s) pending — will retry when
+  back online" + a real "Retry now" button (`retryAll()`) while
+  `items.length > 0`, and one dismissible "Couldn't save: <label>.
+  <message>" row per `failedItems` entry (`dismissFailed(id)`). Mounted
+  unconditionally in `App.tsx` alongside `<CookieConsentNotice />`.
+  Deliberately generic (doesn't know about decisions specifically),
+  matching `retryQueueStore`'s own design.
+
+**Tests added at all three levels:**
+- Unit (`frontend/src/state/retryQueueStore.test.ts`): a
+  `PermanentRetryFailure` rejection removes the item and populates
+  `failedItems` (and a second `retryAll()` pass doesn't call `run()`
+  again — proof it actually stopped, not just moved the loop
+  elsewhere); a plain/`TypeError` rejection still stays queued (proves
+  the distinction goes both ways); `dismissFailed()` unit test.
+- Unit (`frontend/src/api/decisions.test.tsx`): a new test where the
+  *first* attempt is a network failure (queues it) and the *retried*
+  attempt gets a real 404 `ApiError` — asserts the item leaves the
+  queue, appears in `failedItems` with the server's message, and a
+  subsequent `retryAll()` pass doesn't re-attempt the request.
+- Unit (`frontend/src/components/PendingRetryBanner.test.tsx`, new
+  file, 6 tests): renders nothing when empty; shows singular/plural
+  pending copy; "Retry now" calls the real `retryAll()`; renders a
+  failed item's real label/message distinctly from a pending one;
+  "Dismiss" calls the real `dismissFailed(id)` for the right item only.
+- Playwright, real browser (`frontend/e2e/offlineSession.msw.spec.ts`,
+  2 new tests): "queued decision shows a visible pending indicator,
+  which clears once the retry actually succeeds" and "a decision that
+  fails again for a real reason on retry... surfaces as a failure, not
+  an invisible infinite loop" (also proves a *subsequent* reconnect
+  doesn't resurrect it into the pending queue, and that Dismiss removes
+  it). Added `setDecisionNotFound`/e2eHandlers' `isDecisionNotFound`
+  flag (mirrors `setDecisionNetworkDown`'s live-toggle pattern) to
+  simulate the "real reason" retry failure.
+
+Worked (full check suite, actual results):
+- `npx vitest run` (frontend) => 34 files / 171 tests passed (up from
+  161 in the prior COMPLETE entry — 10 net new across the 3 files
+  above).
+- `npx tsc -b --noEmit` => clean.
+- `npx eslint . --max-warnings 0` => clean.
+- `npm run build` => clean production build.
+- `npx playwright test` => 14/14 passed (the 12 from the prior COMPLETE
+  entry, unchanged, plus these 2 new ones) — re-ran the full suite twice
+  more after the `networkMode` fix, stable both times, no flakes.
+- Backend `pytest -q` => 213 passed (untouched, confirmed no
+  regression).
+
+Changed: frontend/src/state/retryQueueStore.ts,
+frontend/src/state/retryQueueStore.test.ts, frontend/src/api/decisions.ts,
+frontend/src/api/decisions.test.tsx, frontend/src/api/queryClient.ts
+(the `networkMode` fix), frontend/src/api/testUtils.tsx (mirrored for
+test/prod parity), frontend/src/components/PendingRetryBanner.tsx (new),
+frontend/src/components/PendingRetryBanner.test.tsx (new),
+frontend/src/components/index.ts, frontend/src/state/index.ts,
+frontend/src/App.tsx (mounts `<PendingRetryBanner />`),
+frontend/src/api/mocks/e2eHandlers.ts (`isDecisionNotFound`),
+frontend/e2e/support/mswBrowser.ts (`setDecisionNotFound`),
+frontend/e2e/offlineSession.msw.spec.ts (2 new tests).
+
+Open: none for Findings 1/2. The `networkMode: "always"` fix is a
+project-wide mutation-behavior change (not scoped only to decisions) —
+worth flagging forward that any *other* mutation (Zotero push,
+disconnect, remove-saved) now also always attempts its real network
+call rather than being silently paused by TanStack Query while the
+browser is offline; this is the more correct behavior given this
+project's own custom `networkStore`/`retryQueueStore" mechanism, but it
+is a behavior change to double-check against for anyone who
+independently tested those other mutations' offline behavior before
+this fix landed. This should close out Tier 4 per the coordinator's
+note — requesting re-dispatch of verification.

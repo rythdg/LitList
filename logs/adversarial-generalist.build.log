@@ -1828,3 +1828,158 @@ not re-review 4B/4C's own substance in this pass (out of scope for this
 request — 4B's coverage-gap PIVOT/fix was read only to confirm it didn't
 touch 4A's files, which it doesn't), but nothing found here blocks moving
 Tier 4 toward final merge on the 4A axis specifically.
+
+[2026-07-05T09:55:00] TASK 4C SEC15.6 FOLLOW-UP REVIEW — START
+Reviewing senior-fullstack-developer's "TASK 4C FOLLOW-UP: SEC15.6
+OFFLINE E2E" COMPLETE entry and tester's "TASK 4C SEC15.6 FOLLOW-UP
+VERIFY" COMPLETE entry against BuildPlan.md lines 632-646 and SPEC.md
+§4.5, §11.7, §13.6. Read frontend/src/api/decisions.ts,
+frontend/src/state/retryQueueStore.ts, frontend/src/state/offlineSync.ts,
+frontend/src/state/networkStore.ts, frontend/src/api/saved.ts,
+frontend/src/components/errorCopy.ts, frontend/e2e/offlineShell.spec.ts,
+frontend/e2e/offlineSession.msw.spec.ts, frontend/e2e/externalDowntime.msw.spec.ts,
+and both stores' .test.ts files directly, plus independently re-ran
+`npx vitest run` (33/33 files, 161/161 tests, matches tester's claim)
+and a targeted subset. Focus per instructions: same-pmid double-decide
+dedup, retry-failure handling, cross-action ordering, optimistic-update
+visibility on eventual permanent failure, externalDowntime's actual
+assertion, and the flagged non-decision-flow coverage gap.
+
+[2026-07-05T10:20:00] TASK 4C SEC15.6 FOLLOW-UP REVIEW — COMPLETE
+
+**Finding 1 (SIGNIFICANT) — retryAll() cannot distinguish "genuinely
+failed, stop retrying" from "still offline, keep retrying," so a
+decision that permanently fails on retry (real ApiError: 404/422/401/
+CSRF-stale, not a network blip) gets stuck in the queue and silently
+re-attempted forever on every future `online` event, with no bound and
+no escalation.** `retryQueueStore.ts`'s `retryAll()` wraps every
+`item.run()` in one `try/catch` that treats every rejection identically
+("left in the queue deliberately... no error is surfaced from here").
+But `decisions.ts`'s enqueued `run` calls raw `performDecision(vars)` —
+if the retried PATCH now reaches the server and gets a real 4xx (e.g.
+the paper's pmid no longer valid, or the decision value now fails
+validation), `apiFetch` throws a genuine `ApiError`, which propagates
+through `run()` and is caught by the *same* generic branch as a network
+timeout, and stays queued indefinitely. Confirmed by reading
+`retryQueueStore.test.ts`: its only failure-path test
+("leaves a failed item queued for the next retry pass") uses a generic
+`Error`, never distinguishes an `ApiError`-shaped rejection — there is
+no test (and no code path) that ever drops or surfaces a permanently-
+failed queued decision. Concrete trigger: user decides pmid X while
+truly offline (network TypeError, correctly queued per §4.5 point 4);
+by the time reconnect happens the paper's row was independently deleted
+server-side (session expiry, admin action, or a 401 from an expired
+CSRF/session cookie per §9.1-class expiry) — the retried PATCH now
+returns a real `ApiError`, and the item just sits in the queue forever,
+silently retried on every subsequent online flap, never surfaced,
+never dropped.
+
+**Finding 2 (SIGNIFICANT) — combined with Finding 1: there is zero
+user-visible indication that a queued decision is "pending" vs.
+confirmed, indefinitely, for the decision-PATCH path specifically.**
+Verified via `grep -rln "retryQueueStore" frontend/src`: the only
+non-test consumers are `main.tsx` (wires the listener) and
+`decisions.ts` (the producer) — no component anywhere reads
+`useRetryQueueStore().items` to render a pending badge for a
+swiped-away card. `errorCopy.ts`'s "Pending — will retry when back
+online" copy (grep-confirmed) is scoped to the `zotero_push` context
+only, driven by that flow's own separate `useZoteroPush().isPending`/
+local state — it is never wired to `retryQueueStore` for decisions.
+Since the card has already left the stack by the time a decision fails,
+and the optimistic update is (correctly, per §4.5) never rolled back on
+a network-level failure, a decision that silently fails forever (per
+Finding 1) is indistinguishable in the UI from one that saved
+successfully — the user has no way to ever notice or intervene (no
+"Retry now" affordance exists for decisions the way one does for
+Zotero push in `ZoteroPushFlow.tsx`). This is a direct, verified answer
+to focus area 4: the UI looks identical whether the decision saved or
+is stuck forever.
+
+**Finding 3 (MINOR, latent not currently reachable) —
+`retryAll()`'s success-path removal (`items.filter(i => i.id !==
+item.id)`) matches by `id` string, not by object/reference identity.**
+If a second `enqueue()` with the same id ever races a first item's
+in-flight `run()` during an active `retryAll()` pass (e.g. a future
+manual "Retry now" affordance, or a future §4.7-style re-decide flow),
+the stale item's eventual success would incorrectly remove the fresher
+item that replaced it, dropping the user's actual latest intent from
+the queue without ever running it. Verified this is *not* currently
+reachable: §4.7 (SPEC.md line 508-516) explicitly says undo only
+affects the Saved List's export-time state via a separate `DELETE
+/saved/{pmid}` mutation (`api/saved.ts`, `useRemoveSaved`, no
+`retryQueueStore` involvement at all) and never resurrects/re-decides
+the card, and TanStack Query mutation retries are disabled
+(`queryClient.ts`), so there is exactly one producer today and no way
+to double-enqueue the same pmid while a retry is in flight. Flagging as
+a latent design fragility worth a code comment/guard before Task 4A/4B
+or any future work adds a second producer or a manual retry-now
+affordance for decisions, not as an active bug today. Simple dedup
+(swipe-right-then-left before reconnect, single item at rest, not
+mid-retry) works correctly, confirmed by `retryQueueStore.test.ts`'s
+"re-enqueuing with the same id replaces rather than duplicates" and by
+reading `enqueue()`'s filter-then-append logic directly.
+
+**Finding 4 (MINOR/informational, not blocking) — asymmetric retry-queue
+coverage between decisions and saved-list removal, both §4.5/§4.7
+actions.** `api/saved.ts`'s `useRemoveSaved` (`DELETE /saved/{pmid}`)
+has the identical shape of problem (optimistic removal that could fail
+on a network-level error) but its `onError` unconditionally rolls back
+regardless of `ApiError` vs. network failure — it was not wired to
+`retryQueueStore` the way `decisions.ts` now is. This is defensible
+under §4.5 point 4's "may be retried" (not "must"), and rolling back a
+failed removal is arguably correct (the item just reappears, no data
+loss), so I'm not rating this a real functional gap — but it's an
+inconsistency worth someone consciously deciding on rather than an
+accidental byproduct of which file this follow-up happened to touch.
+
+**Focus area 5 (externalDowntime.msw.spec.ts) — VERIFIED, tester's
+characterization is accurate.** Read the file directly:
+`expect(await page.evaluate(() => navigator.onLine)).toBe(true)` runs
+before any interaction and the test never calls `context.setOffline`
+or dispatches a synthetic offline event; separately asserts the
+`service_unavailable` copy/`data-code` and explicit absence of "you're
+offline" text. Cross-checked `networkStore.ts`'s own doc comment and
+grepped all `setOnline(...)` call sites — confirmed the only two
+call sites are `offlineSync.ts`'s real `online`/`offline` listeners;
+nothing in the search/error path ever touches it. No issue found here.
+
+**Focus area 6 (coverage gap: new-search/Zotero-push while offline) —
+assessed as a real (if narrow) test coverage gap, not a production
+functional gap**, for the *new-search* case: §4.5 point 3's "clear
+'you're offline' state" for new-search-while-offline is covered by
+`errorCopy.ts`'s existing unit tests and `App.tsx`'s wiring
+(`isOffline` gates the shared `ErrorState`), just not re-proven at the
+Playwright/real-app level for that specific trigger — low risk, since
+it's the same `getErrorCopy`/`ErrorState` plumbing already proven
+end-to-end by `externalDowntime.msw.spec.ts` and the offline session
+spec, just triggered from a different call site. For Zotero push,
+`ZoteroPushFlow.tsx` already has its own independent offline/pending/
+retry handling (its own "Pending — will retry (Retry now)" affordance,
+confirmed via grep) that does not depend on `retryQueueStore` at all —
+so this isn't an unwired gap the way decisions.ts's fix closed, it's a
+parallel, separately-tested mechanism (4B's Zotero specs). Agree with
+tester: worth flagging forward, not blocking.
+
+**Overall verdict:** the specific claims tester verified (enqueue()
+had zero producers before/one real producer now, the ApiError-vs-
+network distinction, the reconnect-replay test's non-vacuousness, the
+externalDowntime assertion, and the full-suite pass counts) all hold up
+under independent re-reading and re-running — nothing tester reported
+was wrong. However, tester's "Coverage assessment" section did not
+surface Findings 1/2 above (the retry mechanism's inability to ever
+give up on a genuinely-failed retry, and the total absence of a
+user-visible pending indicator for decisions) — these are real gaps in
+the underlying mechanism's correctness under realistic conditions
+(session/pmid expiry between queuing and reconnect), not just missing
+test coverage, and were not caught by either the specialist's COMPLETE
+entry or tester's VERIFY entry. Recommend routing Findings 1/2 back to
+senior-fullstack-developer as a further scoped fix (bound retries with
+a max-attempt/backoff-then-surface policy, and at minimum a body-level
+"pending" style state on the Saved List for retry-queued items) before
+treating §4.5 point 4's "automatic retry on reconnect" as fully closed
+production behavior, though the specific §15.6 Playwright-test
+checkpoint as literally scoped (3 bullets + §13.6 distinctness) is
+correctly met by what was built. No blocking findings against the
+literal §15.6 checkpoint; Findings 1/2 are significant against the
+broader §4.5/production-correctness claim implied by "Task 4C fully
+closed."
