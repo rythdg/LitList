@@ -25,6 +25,16 @@ services:
     startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
     healthCheckPath: /health
     envVars:
+      # Pinned explicitly (also via backend/.python-version) because
+      # Render's Python-runtime default tracks the latest interpreter
+      # release, which regularly outpaces prebuilt wheel availability for
+      # this project's compiled dependency (libsql-experimental) — an
+      # untested/too-new interpreter forces a from-source build that fails
+      # in Render's build sandbox (its Cargo/Rust toolchain cache dir is
+      # read-only). 3.12 is the version this project is built and tested
+      # against everywhere else (CI, local dev, pyproject.toml).
+      - key: PYTHON_VERSION
+        value: 3.12.8
       # --- Database (app/db.py, SPEC.md §12.1/§12.3) ---
       - key: TURSO_DATABASE_URL
         sync: false
