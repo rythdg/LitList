@@ -50,6 +50,14 @@ jobs:
         run: npm run build
         env:
           VITE_BASE_PATH: /LitList/
+          # Without this, frontend/src/api/client.ts's fallback
+          # ("/api/v1", relative) would resolve against GitHub Pages'
+          # own origin (rythdg.github.io) instead of the real Render
+          # backend — the deployed frontend would call the wrong host
+          # entirely. Same zero-code-change-migration reasoning as
+          # VITE_BASE_PATH above: a future redeploy just changes this
+          # one env var, no source edit.
+          VITE_API_BASE_URL: https://litlist-backend.onrender.com/api/v1
 
       - name: Configure Pages
         uses: actions/configure-pages@v5
