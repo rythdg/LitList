@@ -321,3 +321,20 @@ unrelated bug surfacing from investigating the second - is exactly why
 this project never treats "tests pass" as sufficient on its own.
 Tier 4 (4A, 4B, 4C, plus this follow-up) is now FULLY AND FINALLY
 CLOSED. Final: 213/213 backend, 171/171 frontend, 14/14 Playwright.
+
+[2026-07-05] Task 5A - MERGE CONFIRMED (real infra, real Turso DB)
+tester independently reproduced the ORIGINAL bug (embedded authToken
+query param silently dropped by sqlalchemy-libsql 0.2.0, confirmed via
+the exact same 401/"empty JWT token" error) before confirming the fix
+(auth_token via connect_args) resolves it against the live Turso
+database with a genuine cross-process round-trip. Adversarial review
+found no code-correctness issues but caught a real, if minor, leak: the
+live Turso hostname (not the auth token itself - that was never found
+anywhere) had been printed in plaintext into three git-tracked build
+logs, one commit away from permanent git history. Redacted directly by
+the orchestrator (log prose, not application code, so no specialist
+round-trip needed) before committing. Manual-only remainder, documented
+and out of scope for any agent: importing render.yaml as a Blueprint on
+Render's dashboard, filling in the 12 sync:false secrets, and confirming
+a real spin-down/restart survives - this needs the human's dashboard
+access.

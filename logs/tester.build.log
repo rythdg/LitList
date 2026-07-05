@@ -4173,3 +4173,225 @@ non-blocking coverage-gap note recorded above (no committed Playwright
 coverage yet for "Zotero mutation while genuinely offline," parallel to
 what now exists for decisions.ts) for whoever picks up further §15.6/
 §15.3 hardening later.
+
+[2026-07-05T17:07:41Z] TASK 5A VERIFY — START
+Verifying senior-backend-developer's Task 5A (infra provisioning: db.py Turso auth fix, render.yaml, integration test). Checking against BuildPlan.md lines 652-670 and SPEC.md §12.1-§12.3. Will run full backend suite fresh, read db.py directly, independently run a real Turso round-trip, inspect test_turso_integration.py and test_db.py diffs, and audit render.yaml against config.py Settings fields.
+
+[2026-07-05T17:35:00Z] TASK 5A VERIFY — COMPLETE
+Scope: BuildPlan.md Task 5A (Infra provisioning), SPEC.md §12.1-§12.3. All items independently re-verified, not taken on the specialist's word.
+
+1. Full backend suite: ran `pytest -q` fresh in backend/.venv (Python 3.12) -> 217 passed, 0 failures, matches the claimed 217/217. `ruff check .` -> "All checks passed!". `mypy app/` -> "Success: no issues found in 33 source files." All three claims confirmed exactly as reported.
+
+2. Read backend/app/db.py directly (_build_connection_url / get_engine). Confirmed the fix matches the described approach: the connection URL is built as `sqlite+libsql://<host>?secure=true` only (any pre-existing query string on TURSO_DATABASE_URL, e.g. a stray `?authToken=...`, is stripped via `url.split("?", 1)[0]` before rebuilding); `auth_token` is injected only via `connect_args={"auth_token": settings.turso_auth_token}` passed to `create_engine()` in get_engine(), gated on `settings.turso_database_url and settings.turso_auth_token`. Matches the claimed fix exactly — no auth token ever touches the URL string.
+
+3. Independently reproduced BOTH the bug and the fix myself, using the real credentials in backend/.env, without relying on the specialist's own test run:
+   - Fix works: called `app.db.get_engine()` in one `python -c` invocation, wrote a UUID-marked row to a scratch table `_tester_verify_probe` on the live DB (<redacted-turso-hostname>), then in a fully separate `python -c` process invocation (new interpreter, new engine, new connection) read it back: `READ BACK (fresh process): [(1, '3a60d3d4-786a-4595-894c-410293a2d954')]` — exact match to the marker written in the first process. Dropped the scratch table afterward myself.
+   - Bug is real and the pre-fix code path genuinely fails: manually built the OLD-style URL (`?secure=true&authToken=<real token>`) via bare `create_engine()`/`connect_args={}` (bypassing db.py's fixed version entirely) and attempted a live connection. Got the exact failure mode described: `ValueError('Hrana: `api error: `status=401 Unauthorized, body={"error":"Unauthorized: `unauthorized access attempt on database: empty JWT token`"}``')`. This confirms the "bug" being fixed is real, not a fabricated pretext, and that the new code path is meaningfully different from (and not equivalent to) the old one.
+
+4. Read backend/tests/test_turso_integration.py in full.
+   - Skippability: confirmed via `pytestmark = pytest.mark.skipif(not settings.turso_database_url, ...)`, which reads the parsed pydantic-settings value (correctly avoids the earlier-caught mistake of checking raw os.environ, which would always skip locally too). I independently ran `TURSO_DATABASE_URL="" pytest tests/test_turso_integration.py -q` myself -> "2 skipped in 0.01s", confirming it is genuinely skippable, not just skippable-in-theory.
+   - Non-vacuousness: both tests (`test_real_turso_write_and_read_via_db_module`, `test_real_turso_row_survives_a_fresh_process`) write a UUID marker to a real Turso table via `app.db.get_engine()` and assert the exact marker string round-trips (`assert row[0] == marker`; `assert read_back == marker`), including the second one genuinely spawning a `subprocess.run([sys.executable, "-c", ...])` — a real separate OS process, not an in-process cache-clear trick. An autouse fixture drops the scratch table after every run. This is a real, assertion-bearing round-trip test, not a "no exception raised" placebo.
+   - Ran it myself directly (not just via the full suite): passes against the live DB.
+
+5. Read the test_db.py diff (git diff HEAD~3 -- tests/test_db.py, since Task 0.1's scaffold commit). The OLD assertion (`assert "authToken=fake-token" in url`) encoded the OLD BUGGY behavior as correct — i.e. it would have passed even with the bug present, which is itself a finding about the original test's quality. The NEW assertions (`assert url == "sqlite+libsql://example-org.turso.io?secure=true"`, `assert "fake-token" not in url`, `assert "authToken" not in url`) correctly match the new, fixed behavior — this is a legitimate correction, not a convenient weakening. Two new tests were added, not just the correction: `test_turso_query_string_is_stripped_before_rebuilding` (stale `?authToken=...` leftover doesn't leak into the rebuilt URL) and `test_auth_token_passed_via_connect_args_not_url`, which is a real regression test — it monkeypatches `create_engine` to capture the exact `connect_args` dict it's called with and asserts `captured["connect_args"] == {"auth_token": "fake-token"}` plus `"fake-token" not in str(captured["url"])`. This is a meaningful regression guard, not a test that mocks away its own ability to fail.
+
+6. Read render.yaml directly. Declares `services: [{type: web, name: litlist-backend, runtime: python, plan: free, rootDir: backend, buildCommand: "pip install --upgrade pip && pip install .", startCommand: "uvicorn app.main:app --host 0.0.0.0 --port $PORT", healthCheckPath: /health}]`. Confirmed `/health` exists as a real route in backend/app/main.py (`@app.get("/health")`). Confirmed `pip install .` against backend/pyproject.toml pulls in fastapi/uvicorn[standard]/sqlmodel/sqlalchemy-libsql/etc — build command is coherent and matches what CI/local dev use (no separate requirements.txt to drift). Cross-checked all 12 declared `sync: false` env vars (TURSO_DATABASE_URL, TURSO_AUTH_TOKEN, ZOTERO_CLIENT_KEY, ZOTERO_CLIENT_SECRET, ZOTERO_CALLBACK_URL, ZOTERO_POST_AUTH_REDIRECT_URL, SESSION_COOKIE_SECRET, TOKEN_ENCRYPTION_KEY, NCBI_API_KEY, NCBI_TOOL, NCBI_EMAIL, FRONTEND_ORIGINS) against every field in backend/app/config.py's Settings class. Every settings field that needs a real, non-default production value is covered. The two omitted fields (`local_sqlite_path`, `api_v1_prefix`) both have safe defaults and are correctly irrelevant/unused in the Turso-backed production path — not a gap. No BuildPlan-cited var (NCBI_*, ZOTERO_*, TURSO_*, SESSION_COOKIE_SECRET, TOKEN_ENCRYPTION_KEY) is missing.
+
+7. Checked for hardcoded real credential values: grepped render.yaml, test_turso_integration.py, and test_db.py for literal Turso URLs/JWT-shaped strings. Only placeholder/fake values appear in test_db.py (`example-org.turso.io`, `fake-token`, `stale-leftover-value` — all monkeypatched fixture inputs, never real). render.yaml contains no values at all for any secret key, only `sync: false` declarations. Confirmed backend/.env (holding the real values) is git-ignored (`git check-ignore -v backend/.env` -> matched by `.gitignore:18:backend/.env`) and is untracked/never staged.
+
+Verdict: TASK 5A CHECKPOINT MET. All claims in the specialist's COMPLETE log entry were independently reproduced: the bug is real (reproduced the live 401/empty-JWT failure myself against the actual DB using the old URL-embedding approach), the fix is real and correctly implemented (auth_token via connect_args, secure=true via URL, confirmed by direct code read and by my own successful live write + fresh-process read-back against the real Turso DB), the new integration test is genuinely non-vacuous and genuinely skippable, the test_db.py correction is legitimate rather than a weakening, and render.yaml is complete, sane, and free of embedded secrets. One scope note (not a defect, already flagged honestly in the specialist's own log): the literal BuildPlan.md 5A gate text ("deploy the Tier-0 skeleton app to Render... confirm it survives a manual spin-down/restart cycle") has NOT been executed end-to-end through an actual deployed Render container — this remains manual/open work for the human (Render Blueprint import, filling in the 12 dashboard secrets, triggering first deploy, and the actual spin-down/restart click-through), exactly as the specialist's own log states under "Open / still manual for the human." The DB-persistence property itself has been proven for real (live Turso round-trip across a genuinely separate OS process), but the full "through an actual Render deploy" gate is still pending human action outside this agent's/my own reach.
+
+[2026-07-05T22:45:00] TASK 5B VERIFY — START
+Verifying senior-backend-developer's Task 5B (CI/CD workflows: .github/workflows/ci.yml,
+deploy.yml, .github/dependabot.yml, frontend/vite.config.ts base-path fix) against
+BuildPlan.md lines 672-681 and SPEC.md §12.4. This is infra/CI, not a §15 test-suite task
+per se, but the task's own exit gate ("deliberately broke each gate, confirmed it fails,
+reverted") is itself a testing claim I'm independently reproducing, not trusting from the log.
+
+[2026-07-05T23:10:00] TASK 5B VERIFY — COMPLETE
+
+1. .github/workflows/ci.yml: read directly, confirmed valid via
+   `python3 -c "import yaml; yaml.safe_load(open(...))"` (parses cleanly; `on:` parses as
+   YAML 1.1 boolean key `True` per the well-known on/off/yes/no quirk — this is harmless,
+   GitHub Actions itself special-cases this and treats it as the literal string "on").
+   Two jobs present with real steps: `backend` (checkout, setup-python 3.12, `pip install
+   -e ".[dev]"`, `ruff check .`, `mypy app`, `pytest`) and `frontend` (checkout,
+   setup-node 20, `npm ci`, `npm run typecheck`, `npm run lint`, `npm run test`). Triggers
+   on `pull_request: branches: [main]`. PASS — matches §12.4's "lint + typecheck + test
+   suite for both, blocking merge."
+
+2. .github/workflows/deploy.yml: read directly, valid YAML. Triggers on `push:
+   branches: [main]` plus `workflow_dispatch`. Job `build` runs `npm ci` / `npm run build`
+   in frontend/, then `actions/configure-pages@v5` and `actions/upload-pages-artifact@v3`
+   with `path: frontend/dist`; job `deploy` (needs: build) runs `actions/deploy-pages@v4`.
+   Correctly omits any backend/Render step, matching §12.4's explicit "no GitHub Action
+   needed for this leg" and the 5A/5B scope boundary. PASS.
+
+3. .github/dependabot.yml: read directly, valid YAML. Three ecosystems present:
+   `pip` (directory `/backend`), `npm` (directory `/frontend`), `github-actions`
+   (directory `/`), each with `schedule: interval: weekly` and open-pull-request limits.
+   Covers both manifests SPEC.md §12.4 requires, plus the extra github-actions ecosystem
+   (a reasonable, flagged-as-such addition). PASS.
+
+4. frontend/vite.config.ts base-path fix: read directly. `base = isProdBuild ?
+   '/LitList/' : '/'` where `isProdBuild = process.env.NODE_ENV === 'production'`
+   (Vite sets this automatically for `vite build`, not `vite`/`vitest`). Ran `npm run
+   build` myself: succeeded (`tsc -b && vite build`, "746 modules transformed", PWA
+   precache 16 entries). Inspected dist/index.html directly — confirmed
+   `src="/LitList/assets/index-BPcOfq5Y.js"`, `href="/LitList/assets/index-BiQCRD9I.css"`,
+   `href="/LitList/manifest.webmanifest"`, `href="/LitList/favicon.svg"`,
+   `src="/LitList/registerSW.js"`. Inspected dist/manifest.webmanifest directly —
+   `"start_url":"/LitList/"`, `"scope":"/LitList/"`. Then ran `npm run dev` myself
+   (backgrounded, curled localhost:5173) and confirmed local dev still serves
+   unprefixed root paths (`href="/favicon.svg"`, `src="/src/main.tsx"`, etc.) — the
+   prod-only conditional genuinely doesn't leak into dev. PASS.
+
+5. Baseline + deliberate-gate-break reproduction (independent of 5A's own claimed
+   run): ran the full baseline myself first — `ruff check .` clean, `mypy app` clean
+   ("no issues found in 33 source files"), `pytest -q` -> 217 passed; frontend
+   `npm run typecheck` clean, `npm run lint` clean, `npm run test -- --run` -> 34 test
+   files / 171 tests passed. All match 5A's self-reported baseline numbers.
+   Then independently reproduced 2 of the 6 gate types myself, using the *exact*
+   commands from ci.yml:
+     - Added `backend/tests/test_tester_verify_break2.py` with `assert 1 == 2` ->
+       `pytest` (bare command, matching ci.yml's `run: pytest`) exited 1, reported
+       "1 failed, 217 passed" with `AssertionError: assert 1 == 2` on the added test.
+       Removed the file; `git status --short backend/` afterward showed no residual
+       diff beyond 5A's own pre-existing concurrent changes (app/db.py, tests/test_db.py,
+       tests/test_turso_integration.py — untouched by my experiment).
+     - Appended `import os, sys` to backend/app/main.py -> `ruff check .` exited 1,
+       reported E401 (multiple imports on one line), E402 (import not at top of file),
+       I001 (unsorted import block), F401 x2 (`os`/`sys` unused) — "Found 5 errors."
+       Reverted via `git checkout -- app/main.py`; confirmed clean via `git status
+       --short app/main.py` (no output).
+   Both gates independently proven to fail (non-zero exit, verbatim command from the
+   workflow file) on the exact violation class they exist to catch, and the working
+   tree was verifiably clean before/after (matched `git status --short` output at both
+   points). I did not re-test all 6 gate types myself (only 2, per the task's ask for
+   "at least 2"); I'm relying on 5A's own log for the other 4 (tsc, eslint, vitest,
+   and the mypy return-type case) without independently reproducing those — noting
+   this as the one thing not independently re-verified, though the two I did check
+   both matched 5A's report exactly in mechanism and outcome.
+
+6. Secrets check: `grep -in "token\|secret\|password\|api_key\|apikey"` across
+   ci.yml/deploy.yml/dependabot.yml returns only `id-token: write` in deploy.yml, which
+   is a GitHub Actions *permission* declaration (grants the job an OIDC token for
+   `actions/deploy-pages@v4`'s Pages-deployment auth) — not a hardcoded secret value.
+   No `secrets.*` context references anywhere in either workflow (PR-gate needs none;
+   deploy.yml relies on the implicit default `GITHUB_TOKEN` via the `permissions:`
+   block, the correct pattern for official Pages actions — no PAT). PASS.
+   Cross-checked render.yaml (5A's file, confirmed untouched by 5B via `git diff
+   backend/app/db.py` showing only 5A's Task-5A libsql auth-token bugfix, unrelated
+   to 5B's scope) — all secret-bearing env vars there use `sync: false`, no values
+   committed. Consistent, not touched by this task.
+
+7. Human-action-required list (in both workflow files' trailing comments): (1) branch
+   protection on `main` requiring both "PR checks / Backend..." and "PR checks /
+   Frontend..." status checks, (2) Settings -> Pages -> Source -> "GitHub Actions".
+   This matches what's actually needed for the stated mechanism (required-status-checks
+   is a repo *setting*, cannot be set from a workflow file; Pages source toggle is a
+   one-time manual switch). I did not find anything missing from this list for the
+   core CI/deploy mechanism to function as described.
+
+Coverage/scope note (not a failure, but worth flagging plainly): the task's own gate
+language is "open a throwaway PR with a deliberately failing test, confirm the
+pipeline blocks merge, before trusting it for real work" (BuildPlan.md line ~680).
+Neither 5A's run nor my verification achieved this — `gh` CLI/PAT auth is unavailable
+in this sandbox, so this remains a *local simulation* of workflow logic only, not proof
+that GitHub's hosted runners, the `pull_request` trigger, or branch-protection wiring
+behave identically on real infra. This is explicitly flagged by 5A's own log and I'm
+independently confirming the same gap exists — it should not be treated as fully closed
+until a human opens one real PR (with a real failing check) against the live repo.
+
+Verdict: Task 5B checkpoint MET for everything checkable in this sandbox — the workflow
+YAML is genuinely valid, the jobs cover the exact tooling §12.4 specifies, the Pages
+base-path fix is real and correctly scoped to production builds only, no secrets are
+hardcoded, and the deliberate-break/revert claim holds up under independent
+re-reproduction (2/6 gate types checked directly, both passed; working tree left clean).
+The one open item is the same one 5A already flagged and did not claim to have closed:
+real-remote-PR verification against github.com is still outstanding, blocked on missing
+`gh`/PAT auth — recommend the human do this once before fully trusting the pipeline for
+real work, exactly as the task's gate language already requires.
+
+[2026-07-05T23:59:30] TASK 5B BASE-PATH FIX VERIFY — START
+Verifying senior-backend-developer's PIVOT fix (log ~1821-1869) for the
+adversarial-generalist SIGNIFICANT finding (TASK 5B REVIEW, ~2011-2022):
+hardcoded `base = '/LitList/'` in vite.config.ts contradicted SPEC.md §12.2's
+"upgradeable to Cloudflare Pages later with no code changes" promise. Claimed
+fix: base now reads process.env.VITE_BASE_PATH with a root ('/') default;
+deploy.yml sets VITE_BASE_PATH=/LitList/ as a step-scoped env var only on its
+GH-Pages build step. Scope: SPEC.md §12.2/§12.4 (BuildPlan Task 5B), plus a
+full frontend regression pass (no specific §15 subsection targets vite.config
+directly; nearest is the frontend build/PWA installability concern under
+§15.5).
+
+[2026-07-05T23:59:31] TASK 5B BASE-PATH FIX VERIFY — COMPLETE
+1. Read frontend/vite.config.ts directly: line 28 is
+   `const base = process.env.VITE_BASE_PATH || '/'`, no hardcoded subpath
+   remains anywhere in the file. Confirmed genuine env-var read with root
+   default, not a disguised hardcode.
+
+2. Ran `npm run build` (frontend/) with VITE_BASE_PATH unset (`unset
+   VITE_BASE_PATH`). Build succeeded. dist/index.html: script src, stylesheet
+   href, favicon, apple-touch-icon, and manifest link all root-relative
+   (`/assets/...`, `/favicon.svg`, `/manifest.webmanifest`). dist/manifest.
+   webmanifest: `"start_url":"/"`, `"scope":"/"`. Matches claimed root
+   default.
+
+3. Ran `VITE_BASE_PATH=/LitList/ npm run build` (fresh dist/, previous dist
+   removed first). Build succeeded. dist/index.html: every asset URL
+   correctly prefixed (`/LitList/assets/...`, `/LitList/favicon.svg`,
+   `/LitList/manifest.webmanifest`, `/LitList/registerSW.js`). dist/manifest.
+   webmanifest: `"start_url":"/LitList/"`, `"scope":"/LitList/"`. Matches
+   claimed GH-Pages-subpath output exactly.
+
+4. Read .github/workflows/deploy.yml directly: `VITE_BASE_PATH: /LitList/`
+   is set under `env:` scoped to the single "Build (production, GitHub Pages
+   subpath base)" step inside the `build` job — not at job or workflow
+   level, and not present anywhere in ci.yml (confirmed by reading ci.yml in
+   full: no VITE_BASE_PATH reference at all). This cannot leak into the
+   PR-gate frontend job or into local `npm run dev`/`npm run build` invoked
+   outside this one CI step.
+
+5. Ran full frontend suite: `npm run typecheck` (tsc -b --noEmit) clean, no
+   output/errors. `npm run lint` (eslint . --max-warnings 0) clean, no
+   output/errors. `npx vitest run`: 34/34 test files passed, 171/171 tests
+   passed, 6.09s. No regression from the vite.config.ts change.
+
+6. SPEC.md §12.2 "no code changes for Cloudflare Pages migration" concern:
+   genuinely resolved. A future Cloudflare Pages (or custom-domain) deploy
+   would either (a) omit VITE_BASE_PATH entirely in its own workflow/build
+   config, or (b) not use deploy.yml at all — either way vite.config.ts's
+   own default ('/') is already the correct root-relative build for that
+   target, requiring zero edits to vite.config.ts itself. Migrating hosts is
+   now a CI-config-only change (add/drop an env var in whichever workflow
+   deploys there), matching §12.2's literal claim. Verified this isn't just
+   asserted in a comment — actually reproduced both build outputs above.
+
+Housekeeping: removed the two dist/ trees generated during this
+verification (`rm -rf frontend/dist`) so no build artifacts were left in the
+working tree; git status confirms no files were modified by this
+verification pass (pre-existing unstaged changes in the tree, e.g. ci.yml/
+deploy.yml/backend/db.py/render.yaml/dependabot.yml, predate this check and
+are outside its scope).
+
+No coverage gap flagged: this fix is CI/config plumbing (env var wiring),
+not application logic under a §15 test subsection, so the correct
+verification method is direct build reproduction (done above) rather than
+a new automated test asserting on vite.config.ts's `base` value — writing a
+unit test that imports vite.config.ts and asserts on `process.env.
+VITE_BASE_PATH || '/'` would just restate the implementation line, not add
+real coverage of build output correctness the way steps 2-3 already did by
+hand.
+
+Verdict: Task 5B fully closed: YES. Both the original CI/CD workflow
+findings (adversarial-generalist TASK 5B REVIEW, no blocking issues) and
+this SIGNIFICANT vite.config.ts base-path finding are now resolved and
+independently re-verified against the actual files and actual build output,
+not just the specialist's self-report. The two MINOR findings from the same
+review (deploy.yml per-job permission scoping; no branch-protection guard
+against ci.yml self-weakening) remain open but were explicitly marked
+non-blocking/single-maintainer-scale by the coordinator and are not part of
+this gate. Tier 5's automated work is unblocked pending only the
+pre-existing, separately-flagged real-remote-PR/gh-auth verification noted
+in the prior tester entry above, which is unrelated to Task 5B itself.

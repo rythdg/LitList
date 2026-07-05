@@ -1983,3 +1983,184 @@ correctly met by what was built. No blocking findings against the
 literal §15.6 checkpoint; Findings 1/2 are significant against the
 broader §4.5/production-correctness claim implied by "Task 4C fully
 closed."
+
+[2026-07-05T23:45:00] TASK 5B REVIEW — START
+Reviewing Task 5B (CI/CD workflows) per BuildPlan.md lines 672-681 and
+SPEC.md §12.4, cross-checking tester's TASK 5B VERIFY (logs/tester.build.log
+~4204-4315) and senior-backend-developer's TASK 5B COMPLETE
+(logs/senior-backend-developer.build.log ~1701) entries against the actual
+files: .github/workflows/ci.yml, .github/workflows/deploy.yml,
+.github/dependabot.yml, frontend/vite.config.ts. Six focus areas: workflow
+permission scope, PR-gate self-weakening bypass surface, Dependabot
+auto-merge risk, deploy.yml trigger safety, Vite base-path brittleness,
+deploy.yml concurrency/race safety.
+
+[2026-07-05T23:52:00] TASK 5B REVIEW — PIVOT
+While assessing focus area 5 (Vite base path), re-read SPEC.md §12.2 and
+found it explicitly promises GitHub Pages is "upgradeable to Cloudflare
+Pages later with no code changes since it's just static files." The
+hardcoded `base = '/LitList/'` in vite.config.ts directly contradicts this
+guarantee (Cloudflare Pages/custom domains serve from root, not a
+`/reponame/` subpath) — escalated this from an anticipated "brittleness,
+not necessarily fix-now" note to a SIGNIFICANT finding since it's a
+verified contradiction of a specific spec citation, not a hypothetical.
+
+[2026-07-05T23:58:00] TASK 5B REVIEW — COMPLETE
+Findings (most severe first):
+
+1. SIGNIFICANT — frontend/vite.config.ts hardcodes `base = '/LitList/'`
+   for prod builds, contradicting SPEC.md §12.2's explicit claim that
+   GitHub Pages is "upgradeable to Cloudflare Pages later with no code
+   changes since it's just static files." Cloudflare Pages/custom domains
+   serve from root, not a GH-Pages-style `/reponame/` subpath; migrating
+   per §12.2's own stated plan would 404 every asset/manifest/SW path
+   without editing this file — a real code change the spec promises won't
+   be needed. Fix: make the base path env-var-driven (e.g.
+   VITE_BASE_PATH, defaulting to /LitList/ for the current GH Pages
+   target) rather than literally hardcoded. Not blocking today's
+   GH-Pages-only deploy, but the checkpoint claim of matching §12.2
+   doesn't fully hold given this specific citation.
+
+2. MINOR — deploy.yml declares `pages: write`/`id-token: write` at
+   workflow level, so the `build` job (checkout/npm build/upload-artifact
+   only) inherits permissions only the `deploy` job actually uses.
+   Strict least-privilege would scope these per-job. Low real
+   exploitability (build job doesn't invoke anything using the elevated
+   scopes) but doesn't meet the letter of the ask.
+
+3. MINOR — no CODEOWNERS/branch-protection rule found (nor mentioned in
+   either workflow's "human setup required" checklist) preventing a PR
+   from weakening ci.yml's own checks within itself, since `pull_request`
+   (correctly, not `pull_request_target`) runs the PR branch's own copy
+   of the workflow. Low risk at current single-maintainer scale (§12.4),
+   but the gap isn't flagged anywhere for future contributors.
+
+Confirmed clean: ci.yml's `contents: read` is appropriately minimal;
+`pull_request_target` is not used anywhere (safer trigger confirmed);
+no Dependabot auto-merge action/config exists anywhere in .github/ —
+Dependabot PRs go through the same ci.yml gate as any other PR;
+deploy.yml triggers only on push:main + workflow_dispatch, no
+pull_request trigger (no untrusted-PR-content-to-Pages leak path);
+deploy.yml's `concurrency: group: pages, cancel-in-progress: false`
+correctly serializes/dedupes rapid successive pushes per GitHub's
+documented queued-run-cancellation behavior — no deploy race. No
+hardcoded secrets in any of the four files reviewed; deploy.yml
+correctly uses OIDC over a PAT.
+
+tester's log independently re-reproduced 2 of specialist's 6 claimed
+gate-break scenarios (pytest failure, ruff violation) rather than just
+trusting the report, and both logs honestly flag the same unclosed gap
+(no live GitHub PR test possible in-sandbox — gh/PAT unavailable). No
+PIVOT in either underlying log; verified the clean log reflects
+genuinely matching file contents, not a concealed shortcut. Findings 2
+and 3 are not blocking; finding 1 should go back to whoever owns
+vite.config.ts before this checkpoint is called fully closed against
+§12.2, though it doesn't block today's single-target GH Pages deploy.
+
+[2026-07-05T23:40:00Z] TASK 5A REVIEW — START
+Reviewing senior-backend-developer's Task 5A (infra provisioning: db.py
+Turso auth-token fix via connect_args, render.yaml Blueprint,
+test_turso_integration.py, test_db.py updates) against BuildPlan.md
+lines 652-670 and SPEC.md §12.1-§12.3, and independently re-checking
+tester's clean TASK 5A VERIFY entry (logs/tester.build.log). Focus:
+credential exposure risk in the new real-Turso integration test, secret
+handling in render.yaml, whether connect_args could be logged if
+SQLAlchemy debug logging were ever enabled, Turso token-scope blast
+radius in the round-trip test, test cleanup/isolation, and whether the
+local-SQLite connect_args path can collide with the new Turso
+connect_args path in get_engine().
+
+[2026-07-05T23:55:00Z] TASK 5A REVIEW — COMPLETE
+
+Verified directly (not taken on tester's or specialist's word):
+- Read backend/app/db.py in full: `_build_connection_url()`/`get_engine()`
+  branch is `if connection_url.startswith("sqlite:///")` /
+  `elif settings.turso_database_url and settings.turso_auth_token` —
+  these are mutually exclusive (a URL is either the local-SQLite form or
+  the Turso form, never both), so the two connect_args populations
+  (`check_same_thread` vs `auth_token`) cannot collide or interact; no
+  new issue here.
+- Reproduced live: `create_engine(url, connect_args={"auth_token": "FAKE..."})`
+  then `repr(engine)`/`str(engine)` -> `Engine(sqlite+libsql://...?secure=true)`
+  only, no connect_args in the engine's repr/str at any log verbosity;
+  `echo=False` is explicitly set in the one `create_engine()` call site
+  in get_engine() (no separate call site exists that could omit it).
+  Confirmed against the real DB with a genuinely wrong token that the
+  resulting `ValueError`'s message (`JWT error: InvalidToken`) does not
+  include the token value itself — SQLAlchemy/sqlalchemy-libsql do not
+  echo connect_args into any exception text or repr I could produce.
+- render.yaml: all 5 SPEC-§12.3-listed secrets plus ZOTERO_CALLBACK_URL/
+  ZOTERO_POST_AUTH_REDIRECT_URL/FRONTEND_ORIGINS are `sync: false`; no
+  inline values anywhere in the file. Matches tester's claim.
+- test_turso_integration.py: uses a UUID marker (not the real token) as
+  the round-trip value; assertions never reference settings/token/URL
+  objects, only the marker string and row tuples — a failure's pytest
+  output would show the marker and row values, never the credential.
+  Scratch table name `_litlist_task5a_probe` is namespaced (not a
+  generic name like `test` or `data`), created via `CREATE TABLE IF NOT
+  EXISTS` and dropped by an `autouse` fixture after every test
+  (`DROP TABLE IF EXISTS ...`) even on failure (fixture teardown runs via
+  `yield` regardless of test outcome) — confirmed this addresses both the
+  account-wide-token blast-radius concern and repeated-CI-run garbage
+  accumulation concern in the task brief.
+- test_db.py: confirmed via tester's independently-reproduced diff read
+  that no real hostnames/tokens appear (only `example-org.turso.io`/
+  `fake-token`/`stale-leftover-value` placeholders) — re-confirmed
+  myself by grep.
+
+FINDING (SIGNIFICANT, new — not caught by tester's TASK 5A VERIFY entry):
+Both the specialist's and tester's own build-log COMPLETE entries
+(logs/senior-backend-developer.build.log line ~1598 and
+logs/tester.build.log line ~4188) print the real, live production Turso
+database hostname in cleartext: `<redacted-turso-hostname>`.
+These build logs are git-tracked files (not covered by .gitignore, unlike
+backend/.env), and `git status` currently shows both as locally modified
+(uncommitted) — i.e. this hostname is one `git add && git commit` away
+from landing permanently in git history. SPEC.md §12.1/§12.3 explicitly
+groups `TURSO_DATABASE_URL` with `TURSO_AUTH_TOKEN` as a secret that must
+"never [be] committed to the repo," and render.yaml itself treats
+TURSO_DATABASE_URL as sync:false (i.e. as sensitive, not just the auth
+token) — consistent with the project's own classification. The token
+itself was never leaked (verified: no JWT-shaped string anywhere in
+either log, in this diff, or elsewhere in the tree), so this does not by
+itself grant DB access, but it is a concrete, verified violation of the
+stated secret-hygiene rule and hands an attacker one half of the
+credential pair plus a precise target identifier (region + project) for
+free — exactly the kind of habit this build has already had two
+confirmed credential-leak incidents over. Concrete fix: redact the
+hostname (e.g. `litlist-db-<redacted>.aws-<region>.turso.io` or just
+"the real Turso host") in both log entries before committing, and treat
+DB hostnames the same as tokens in future log-writing discipline. Rated
+SIGNIFICANT rather than BLOCKING because (a) the auth token itself is
+intact and never appeared anywhere, (b) the hostname is not yet
+committed to git history and can still be caught/redacted before the
+commit that would make this permanent, and (c) it does not affect
+db.py/render.yaml/test correctness, which are all otherwise sound.
+
+No other findings. Specifically checked and found NOT to be issues:
+- No connect_args/token leak into engine repr, str, or exception text
+  under any reproducible scenario (verified live against the real DB
+  with a real wrong-token 401).
+- Local-SQLite vs Turso connect_args paths are mutually exclusive by
+  construction (if/elif on the built URL), not merged or unioned in any
+  way that could cross-contaminate.
+- test_turso_integration.py is genuinely skippable (verified independently
+  by re-reading the skipif condition against settings, not raw os.environ)
+  and genuinely non-vacuous (asserts real value equality, not just
+  no-exception).
+- Scratch table naming and autouse cleanup fixture correctly bound the
+  blast radius of an account-wide token and prevent CI-run garbage
+  accumulation in the real DB.
+- tester's TASK 5A VERIFY entry's specific claims (bug reproduction, fix
+  correctness, render.yaml completeness, no embedded secrets in
+  render.yaml/test files) all independently re-checked and hold up
+  exactly as claimed — tester's verdict on those points is not wrong,
+  it simply didn't look at its own and the specialist's build-log prose
+  for hostname leakage, which is the one place a real issue survived.
+
+Verdict: TASK 5A CHECKPOINT — code/infra artifacts (db.py, render.yaml,
+test_turso_integration.py, test_db.py) are sound and match their claims.
+One SIGNIFICANT finding (real DB hostname committed to git-tracked build
+logs) needs remediation (redact before committing) before this lands on
+main; not blocking for the code itself but should not be ignored given
+this build's credential-leak history.
