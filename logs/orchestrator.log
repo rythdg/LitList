@@ -338,3 +338,20 @@ and out of scope for any agent: importing render.yaml as a Blueprint on
 Render's dashboard, filling in the 12 sync:false secrets, and confirming
 a real spin-down/restart survives - this needs the human's dashboard
 access.
+
+[2026-07-05] Task 5B - FULLY CLOSED (post base-path fix). Tier 5
+automated work committed and pushed to origin/main (git remote
+github.com/rythdg/LitList set up this session; Turso credentials
+placed in backend/.env, never logged/committed - see Task 5A's entry
+above for the separate hostname-in-logs leak that WAS caught and
+redacted).
+Tier 6, as literally scoped in BuildPlan.md (lines 687-712), requires
+the real deployed system (Render + Pages, still pending the human's
+manual Blueprint import) plus manual passes on real physical devices
+and a real Zotero sandbox account - none of which this orchestrator
+can execute autonomously. Deferred as backlog pending the human
+completing Tier 5's manual remainder. Proceeding instead to the
+human's explicit request: a live functional test (real search, real
+Zotero push/reject) against local dev servers, which exercises the
+same real backend/PubMed/Zotero-OAuth/frontend stack Tier 6 cares
+about, just not through the not-yet-live cloud deployment.

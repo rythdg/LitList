@@ -91,25 +91,39 @@ Do not delete or rewrite prior entries.
 
 ## RESUME POINT — read this first if picking this build back up
 
-**State as of 2026-07-05:** Tiers 0, 1, 2, 3, and 4 are fully built,
-verified, committed to `main`, and working-tree-clean. Backend:
-213/213 tests passing, ruff/mypy clean. Frontend: 34 files/171 unit
-tests + 14/14 Playwright e2e passing, lint/typecheck/build clean.
-**Tier 5 has not started.**
+**State as of 2026-07-05:** Tiers 0, 1, 2, 3, 4, and 5 (automated
+parts) are fully built, verified, committed to `main` and PUSHED to
+the real remote (github.com/rythdg/LitList), and working-tree-clean.
+Backend: 217/217 tests passing, ruff/mypy clean. Frontend: 34
+files/171 unit tests + 14/14 Playwright e2e passing, lint/typecheck/
+build clean.
 
-**Next task per BuildPlan.md:** Tier 5 — Deployment & CI infra (lines
-~652+), parallel, 2 subagents, can technically start as early as Tier 0
-finishes but naturally comes now:
-- **5A** — Infra provisioning (Turso DB via Task 0.1's `db.py` module —
-  not a separate connection path; real deployment env for
-  `TOKEN_ENCRYPTION_KEY`/`SESSION_COOKIE_SECRET` fail-fast; this is also
-  where several backlog items below get addressed — read that section
-  of BuildPlan.md directly for the full task text before dispatching).
-- **5B** — CI/CD workflows (a deliberately-failing throwaway PR must
-  actually get blocked — this is also the natural place to revisit the
-  credential-in-logs lint-rule backlog item below).
-Will need `TURSO_DATABASE_URL`/`TURSO_AUTH_TOKEN` from the human before
-5A can do more than the local-SQLite path it already has — ask early.
+**Tier 5's real find:** a genuine, previously-undiscovered bug in
+`backend/app/db.py`'s Turso connection path — `sqlalchemy-libsql`
+silently drops an `authToken` embedded in the URL query string, so the
+Turso path never actually worked despite passing its own (URL-string-
+only) tests since Tier 0. Fixed (auth_token via `connect_args`) and
+verified against a REAL live Turso database with a genuine
+cross-process round-trip.
+
+**Tier 5 manual remainder (human-only, blocks a fully-live deployment
+but NOT local testing):**
+1. Render dashboard → New → Blueprint → point at the repo → fill in
+   the 12 `sync: false` secrets `render.yaml` prompts for.
+2. GitHub repo Settings → Pages → Source → switch to "GitHub Actions".
+3. (Optional) Settings → Branches → require the two new CI status
+   checks on `main`.
+
+**Tier 6, as literally scoped in BuildPlan.md (lines 687-712), needs
+the real deployed system plus manual real-device passes and a real
+Zotero sandbox account — none of which this orchestrator can execute
+autonomously.** Deferred as backlog until the human finishes the Tier 5
+manual remainder above. **Current focus instead:** a live functional
+test against local dev servers (real backend, real PubMed, real Zotero
+OAuth, real frontend) per the human's explicit request — search
+"Neuroscience, astrocytes," push first 2 results to Zotero, reject the
+next 2, then stop. This exercises the same real stack Tier 6 cares
+about, just not through the not-yet-live cloud deployment.
 
 **Orchestrator process reminder for whoever resumes — READ THE INCIDENT
 NOTE FIRST:** every task this build goes through the same pipeline —
