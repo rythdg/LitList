@@ -35,20 +35,58 @@ describe("StackScreen (§5.3 stack surface)", () => {
   });
 
   it("routes tap and keyboard decisions through the same onDecide callback (§11.4/§13.1)", async () => {
+    // Each input below gets its own fresh render — matching real usage
+    // (`App.tsx` mounts a new `StackScreen` per card, `key={pmid}`) and
+    // required by `useSwipeToDecide`'s re-entrancy guard (adversarial
+    // review, "TASK 4A REVIEW"): once one `StackScreen`/hook instance
+    // commits a decision, that same instance can never commit a second
+    // one — see the dedicated re-entrancy test below for that behavior.
+    const onDecideTapInterested = vi.fn();
+    const tapInterested = render(<StackScreen {...baseProps({ onDecide: onDecideTapInterested })} />);
+    await userEvent.click(tapInterested.getByRole("button", { name: /^interested$/i }));
+    expect(onDecideTapInterested).toHaveBeenLastCalledWith("interested", "tap");
+    tapInterested.unmount();
+
+    const onDecideTapNotInterested = vi.fn();
+    const tapNotInterested = render(<StackScreen {...baseProps({ onDecide: onDecideTapNotInterested })} />);
+    await userEvent.click(tapNotInterested.getByRole("button", { name: /^not interested$/i }));
+    expect(onDecideTapNotInterested).toHaveBeenLastCalledWith("not_interested", "tap");
+    tapNotInterested.unmount();
+
+    const onDecideKeyboardInterested = vi.fn();
+    const keyboardInterested = render(<StackScreen {...baseProps({ onDecide: onDecideKeyboardInterested })} />);
+    fireEvent.keyDown(document, { key: "ArrowRight" });
+    expect(onDecideKeyboardInterested).toHaveBeenLastCalledWith("interested", "keyboard");
+    keyboardInterested.unmount();
+
+    const onDecideKeyboardNotInterested = vi.fn();
+    render(<StackScreen {...baseProps({ onDecide: onDecideKeyboardNotInterested })} />);
+    fireEvent.keyDown(document, { key: "ArrowLeft" });
+    expect(onDecideKeyboardNotInterested).toHaveBeenLastCalledWith("not_interested", "keyboard");
+  });
+
+  it("never fires a second decision for the same card, even from a different input method (re-entrancy)", async () => {
     const onDecide = vi.fn();
     render(<StackScreen {...baseProps({ onDecide })} />);
 
     await userEvent.click(screen.getByRole("button", { name: /^interested$/i }));
-    expect(onDecide).toHaveBeenLastCalledWith("interested", "tap");
+    expect(onDecide).toHaveBeenCalledTimes(1);
 
-    await userEvent.click(screen.getByRole("button", { name: /^not interested$/i }));
-    expect(onDecide).toHaveBeenLastCalledWith("not_interested", "tap");
-
-    fireEvent.keyDown(document, { key: "ArrowRight" });
-    expect(onDecide).toHaveBeenLastCalledWith("interested", "keyboard");
-
+    // A second input on the *same* still-mounted instance (e.g. a
+    // stray keydown landing before the parent swaps in the next card
+    // via a new `key`) must not fire a second decision.
     fireEvent.keyDown(document, { key: "ArrowLeft" });
-    expect(onDecide).toHaveBeenLastCalledWith("not_interested", "keyboard");
+    expect(onDecide).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not commit a swipe/tap decision while isDecisionPending is true", async () => {
+    const onDecide = vi.fn();
+    render(<StackScreen {...baseProps({ onDecide, isDecisionPending: true })} />);
+
+    await userEvent.click(screen.getByRole("button", { name: /^interested$/i }));
+    fireEvent.keyDown(document, { key: "ArrowLeft" });
+
+    expect(onDecide).not.toHaveBeenCalled();
   });
 
   it("toggles play/pause via the space bar, matching the tap play button (§13.1)", () => {

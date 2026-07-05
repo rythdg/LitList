@@ -4,6 +4,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { ZoteroCallbackRoute } from './ZoteroCallbackRoute';
 import { parseCallbackParams } from './zoteroCallbackParams';
 import { HOME_PATH } from './paths';
+import { ZOTERO_REOPEN_FLAG_KEY } from '../state/zoteroPushFlowStore';
 
 function setLocation(pathAndQuery: string) {
   window.history.replaceState({}, '', pathAndQuery);
@@ -39,6 +40,7 @@ describe('parseCallbackParams (§8.2 steps 3-4)', () => {
 describe('ZoteroCallbackRoute (§11.6 screen shell)', () => {
   afterEach(() => {
     setLocation('/');
+    sessionStorage.clear();
   });
 
   it('renders a success confirmation for ?status=success', () => {
@@ -62,6 +64,18 @@ describe('ZoteroCallbackRoute (§11.6 screen shell)', () => {
     setLocation('/oauth/zotero/callback');
     render(<ZoteroCallbackRoute />);
     expect(screen.getByText('Connecting to Zotero…')).toBeInTheDocument();
+  });
+
+  it('writes the one-shot reopen-push-flow sessionStorage flag on success (§8.2 step 6 hand-off, Task 4B)', () => {
+    setLocation('/oauth/zotero/callback?status=success');
+    render(<ZoteroCallbackRoute />);
+    expect(sessionStorage.getItem(ZOTERO_REOPEN_FLAG_KEY)).toBe('1');
+  });
+
+  it('does not write the reopen-push-flow flag on error or unknown status', () => {
+    setLocation('/oauth/zotero/callback?status=error&code=service_unavailable');
+    render(<ZoteroCallbackRoute />);
+    expect(sessionStorage.getItem(ZOTERO_REOPEN_FLAG_KEY)).toBeNull();
   });
 
   it('"Continue to LitList" navigates back to the app home path', async () => {

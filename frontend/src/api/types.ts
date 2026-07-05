@@ -104,32 +104,15 @@ export interface ZoteroPushRequest {
 }
 
 // ---------------------------------------------------------------------
-// Not yet pinned by CONTRACTS.md — typed off SPEC.md §9.2/§10.4 directly.
+// CONTRACTS.md §5 — Queue/Saved/SearchSettings response shapes.
+// Pinned by Task 4A after finding real drift between this file, Task
+// 2B's screens/types.ts, and the actual backend (see CONTRACTS.md's
+// change log and this repo's senior-fullstack-developer.build.log,
+// "TASK 4A — PIVOT"). Flat objects, no nested `paper`/`authors[]` array
+// — `last_author` is a single pre-formatted display string (PubMed
+// ESummary's `LastAuthor` field), never an object; there is no
+// full-author-list source available at this layer.
 // ---------------------------------------------------------------------
-
-/** SPEC.md §9.2 `Paper.authors` entry, from EFetch's AuthorList. */
-export interface PaperAuthor {
-  first_name: string;
-  last_name: string;
-}
-
-/** The subset of `Paper` (§9.2) returned by `/search` and `/queue` —
- * title/metadata only, no abstract yet, per §7.1's two-stage fetch
- * strategy (§10.4's note on `GET /queue`). */
-export interface QueuePaperSummary {
-  pmid: string;
-  title: string;
-  authors: PaperAuthor[];
-  last_author: string | null;
-  journal: string | null;
-  pub_date: string | null;
-  doi: string | null;
-  citation_count: number | null;
-  /** §13.4: true when PubMed's PublicationType/correction-notice data
-   *  marks this record as retracted or corrected — drives the "⚠
-   *  Retracted" badge (owned by Task 2B). */
-  retracted: boolean;
-}
 
 /** SPEC.md §9.2 `QueueDecision.decision`. */
 export type DecisionValue = "pending" | "interested" | "not_interested";
@@ -137,14 +120,31 @@ export type DecisionValue = "pending" | "interested" | "not_interested";
 /** SPEC.md §9.2 `QueueDecision.decided_via`. */
 export type DecidedVia = "swipe" | "auto" | "manual_remove";
 
+/** `backend/app/routes/search.py`/`queue.py`'s `QueueItem` — title/
+ * metadata only, no abstract yet, per §7.1's two-stage fetch strategy. */
 export interface QueueItem {
-  paper: QueuePaperSummary;
-  decision: DecisionValue;
+  pmid: string;
   position: number;
+  decision: DecisionValue;
+  title: string;
+  last_author: string | null;
+  journal: string | null;
+  pub_date: string | null;
+  doi: string | null;
+  citation_count: number | null;
+  /** §13.4: true when PubMed's PublicationType data marks this record as
+   *  retracted — drives the "⚠ Retracted" badge. CONTRACTS.md §5's
+   *  caveat applies: `false` may mean "not yet known," not "confirmed
+   *  not retracted," until the abstract endpoint has fetched this PMID
+   *  at least once. */
+  retracted: boolean;
 }
 
 export interface QueueResponse {
   items: QueueItem[];
+  /** Total PubMed result count for the current query (§7.9's pagination
+   *  bookkeeping) — not merely `items.length`. */
+  total_count: number;
   /** Present when more pages exist server-side (§10.4's transparent
    *  follow-up-ESearch-page behavior) — the frontend does not need to
    *  request "more" explicitly, but this lets a query hook know whether
@@ -168,9 +168,10 @@ export interface SearchRequest {
 
 /** `GET /api/v1/search/settings` (§10.4) — pre-fill for Screen B (§3.5),
  * mirroring `SearchSession` (§9.2) minus its session/query-execution
- * fields. `null` when no search has ever been run this visit. */
+ * fields. `query` is `null` (not an empty string) when no search has
+ * ever been run this visit. */
 export interface SearchSettingsResponse {
-  query: string;
+  query: string | null;
   sort: SortOrder;
   read_aloud_fields: ReadAloudField[];
   default_swipe_behavior: "interested" | "not_interested";
@@ -184,10 +185,19 @@ export interface DecisionUpdateRequest {
 }
 
 /** `GET /api/v1/saved` (§10.4, §5.4) — `QueueDecision` rows where
- * `decision === "interested"`, joined with `Paper`. */
+ * `decision === "interested"`, joined with `Paper`. Same flat shape as
+ * `QueueItem` minus `decision` (always `"interested"` by construction)
+ * — note there is no `decided_at` field on the real backend response. */
 export interface SavedItem {
-  paper: QueuePaperSummary;
-  decided_at: string;
+  pmid: string;
+  title: string;
+  last_author: string | null;
+  journal: string | null;
+  pub_date: string | null;
+  doi: string | null;
+  citation_count: number | null;
+  position: number;
+  retracted: boolean;
 }
 
 export interface SavedResponse {

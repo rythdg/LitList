@@ -15,8 +15,9 @@
  */
 
 import type {
-  QueuePaperSummary,
+  QueueItem,
   QueueResponse,
+  SavedItem,
   SavedResponse,
   SegmentedAbstractResponse,
   ZoteroCollectionsResponse,
@@ -25,14 +26,13 @@ import type {
 
 // From fixtures/pubmed/esummary_response.json + efetch_response.xml +
 // icite_response.json — same 3 cross-consistent PMIDs used throughout
-// Task 0.3's corpus.
-export const FIXTURE_PAPER_NORMAL: QueuePaperSummary = {
+// Task 0.3's corpus. Flat shape (CONTRACTS.md §5, pinned by Task 4A) —
+// no nested `paper`/`authors[]`, `last_author` is a pre-formatted string.
+export const FIXTURE_QUEUE_ITEM_NORMAL: QueueItem = {
   pmid: "38279812",
+  position: 0,
+  decision: "pending",
   title: "Effects of early intervention on outcomes in a mixed-methods cohort study",
-  authors: [
-    { first_name: "Sofia", last_name: "Alvarez" },
-    { first_name: "Wei", last_name: "Chen" },
-  ],
   last_author: "Alvarez S",
   journal: "Journal of Applied Clinical Research",
   pub_date: "2024 Feb",
@@ -43,10 +43,11 @@ export const FIXTURE_PAPER_NORMAL: QueuePaperSummary = {
 
 // esummary_response.json's 38279813 deliberately has no DOI (§13.4);
 // efetch_response.xml marks this PMID as a "Retracted Publication".
-export const FIXTURE_PAPER_NO_DOI_RETRACTED: QueuePaperSummary = {
+export const FIXTURE_QUEUE_ITEM_NO_DOI_RETRACTED: QueueItem = {
   pmid: "38279813",
+  position: 1,
+  decision: "pending",
   title: "A retrospective analysis of adverse events (no DOI on record)",
-  authors: [{ first_name: "Li", last_name: "Chen" }],
   last_author: "Chen L",
   journal: "International Review of Medicine",
   pub_date: "2023 Nov",
@@ -57,10 +58,11 @@ export const FIXTURE_PAPER_NO_DOI_RETRACTED: QueuePaperSummary = {
 
 // icite_response.json deliberately omits 37000001 from `data` — the
 // nullable-citation-count case.
-export const FIXTURE_PAPER_SPARSE: QueuePaperSummary = {
+export const FIXTURE_QUEUE_ITEM_SPARSE: QueueItem = {
   pmid: "37000001",
+  position: 2,
+  decision: "pending",
   title: "Older record with sparse metadata",
-  authors: [],
   last_author: null,
   journal: "Legacy Medical Bulletin",
   pub_date: "1998",
@@ -70,21 +72,31 @@ export const FIXTURE_PAPER_SPARSE: QueuePaperSummary = {
 };
 
 export const FIXTURE_QUEUE_RESPONSE: QueueResponse = {
-  items: [
-    { paper: FIXTURE_PAPER_NORMAL, decision: "pending", position: 0 },
-    { paper: FIXTURE_PAPER_NO_DOI_RETRACTED, decision: "pending", position: 1 },
-    { paper: FIXTURE_PAPER_SPARSE, decision: "pending", position: 2 },
-  ],
+  items: [FIXTURE_QUEUE_ITEM_NORMAL, FIXTURE_QUEUE_ITEM_NO_DOI_RETRACTED, FIXTURE_QUEUE_ITEM_SPARSE],
+  total_count: 3,
   has_more: false,
 };
 
 export const FIXTURE_EMPTY_QUEUE_RESPONSE: QueueResponse = {
   items: [],
+  total_count: 0,
   has_more: false,
 };
 
+export const FIXTURE_SAVED_ITEM_NORMAL: SavedItem = {
+  pmid: FIXTURE_QUEUE_ITEM_NORMAL.pmid,
+  title: FIXTURE_QUEUE_ITEM_NORMAL.title,
+  last_author: FIXTURE_QUEUE_ITEM_NORMAL.last_author,
+  journal: FIXTURE_QUEUE_ITEM_NORMAL.journal,
+  pub_date: FIXTURE_QUEUE_ITEM_NORMAL.pub_date,
+  doi: FIXTURE_QUEUE_ITEM_NORMAL.doi,
+  citation_count: FIXTURE_QUEUE_ITEM_NORMAL.citation_count,
+  position: FIXTURE_QUEUE_ITEM_NORMAL.position,
+  retracted: FIXTURE_QUEUE_ITEM_NORMAL.retracted,
+};
+
 export const FIXTURE_SAVED_RESPONSE: SavedResponse = {
-  items: [{ paper: FIXTURE_PAPER_NORMAL, decided_at: "2026-07-01T12:00:00Z" }],
+  items: [FIXTURE_SAVED_ITEM_NORMAL],
 };
 
 // Reuses the tokenizer corpus's Fig./vs. sentence and the structured

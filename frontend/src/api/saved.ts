@@ -27,7 +27,7 @@ export function useRemoveSaved() {
 
       if (previousSaved) {
         queryClient.setQueryData<SavedResponse>(queryKeys.saved, {
-          items: previousSaved.items.filter((item) => item.paper.pmid !== pmid),
+          items: previousSaved.items.filter((item) => item.pmid !== pmid),
         });
       }
 

@@ -15,21 +15,28 @@
  * details, and Tier 4's hookup of "success" into Screen D1 Step 2
  * collection selection, §5.5) is out of scope here.
  *
- * UI/UX call not pinned by SPEC.md, flagged rather than decided silently:
- * neither §5.5's wireframe (which starts *after* this redirect, at Step
- * 2) nor CONTRACTS.md specifies this redirect's exact query-param names,
- * since the backend route producing it (Task 3B) doesn't exist yet
- * either. This component assumes `?status=success` or
- * `?status=error&code=...&message=...` — reusing the `code`/`message`
- * fields already pinned for `ApiError` in CONTRACTS.md #2 rather than
- * inventing a one-off shape — as the most direct extension of what's
- * already agreed. Whoever builds the real backend redirect (3B) should
- * confirm or correct this against CONTRACTS.md in the same piece of
- * work if it differs.
+ * Query-param shape confirmed against the real backend redirect and
+ * pinned in CONTRACTS.md §6 by Task 4B — this component's own parsing
+ * (`zoteroCallbackParams.ts`) needed no change, since 2A's original
+ * assumption (`?status=success` / `?status=error&code=...&message=...`,
+ * reusing CONTRACTS.md #2's `ApiError` `code`/`message` fields) turned
+ * out to be the shape the backend needed to be fixed to match, not the
+ * other way around — see CONTRACTS.md §6's own note and this repo's
+ * senior-fullstack-developer build log, "TASK 4B — PIVOT".
+ *
+ * On success, this also writes a one-shot `sessionStorage` flag
+ * (`zoteroPushFlowStore.ts`'s `ZOTERO_REOPEN_FLAG_KEY`) before handing
+ * off back into the SPA — since this route is reached via a real, hard
+ * page navigation (every in-memory store starts fresh here), that flag
+ * is how the Saved List panel's push-flow modal knows to reopen itself
+ * once the app remounts, without SPEC.md requiring a separate "login
+ * success" screen (§8.2 step 6: "the app proceeds straight to collection
+ * selection").
  */
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { HOME_PATH } from './paths';
 import { parseCallbackParams, type ParsedCallback } from './zoteroCallbackParams';
+import { ZOTERO_REOPEN_FLAG_KEY } from '../state/zoteroPushFlowStore';
 
 /**
  * Navigates back into the single-page app without a full page reload.
@@ -46,6 +53,12 @@ export function ZoteroCallbackRoute() {
   const [result] = useState<ParsedCallback>(() =>
     parseCallbackParams(window.location.search),
   );
+
+  useEffect(() => {
+    if (result.status === 'success' && typeof sessionStorage !== 'undefined') {
+      sessionStorage.setItem(ZOTERO_REOPEN_FLAG_KEY, '1');
+    }
+  }, [result.status]);
 
   return (
     <main className="flex min-h-screen flex-col items-center justify-center gap-4 bg-white px-6 text-center text-slate-900">

@@ -85,4 +85,41 @@ describe("ZoteroPushFlow (§5.5)", () => {
     );
     expect(screen.getByLabelText(/new collection name/i)).toBeInTheDocument();
   });
+
+  describe("isSaving (Task 4B post-review fix — no double-submit)", () => {
+    it("Step 2: disables Save (and relabels it) and Cancel while a push is in flight", () => {
+      render(
+        <ZoteroPushFlow {...baseProps({ step: "choose_collection", isSaving: true })} />,
+      );
+      const saveButton = screen.getByRole("button", { name: /saving/i });
+      expect(saveButton).toBeDisabled();
+      expect(screen.queryByRole("button", { name: /^save$/i })).not.toBeInTheDocument();
+      expect(screen.getByRole("button", { name: /cancel/i })).toBeDisabled();
+    });
+
+    it("Step 2: Save is enabled (and reads \"Save\") when not saving", () => {
+      render(
+        <ZoteroPushFlow {...baseProps({ step: "choose_collection", isSaving: false })} />,
+      );
+      const saveButton = screen.getByRole("button", { name: /^save$/i });
+      expect(saveButton).toBeEnabled();
+      expect(screen.getByRole("button", { name: /cancel/i })).toBeEnabled();
+    });
+
+    it("Step 2 offline: also disables the pending-retry button while saving", () => {
+      render(
+        <ZoteroPushFlow
+          {...baseProps({ step: "choose_collection", isOffline: true, isSaving: true })}
+        />,
+      );
+      expect(screen.getByTestId("zotero-pending-retry")).toBeDisabled();
+    });
+
+    it("Step 3b: disables Retry (via ErrorState's retryDisabled) while a retry-triggered push is in flight", () => {
+      render(
+        <ZoteroPushFlow {...baseProps({ step: "failure", isSaving: true })} />,
+      );
+      expect(screen.getByRole("button", { name: /retry/i })).toBeDisabled();
+    });
+  });
 });

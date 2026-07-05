@@ -1,10 +1,16 @@
+import { ErrorState } from "../ErrorState";
+
 /**
  * Screen D1 — Zotero push sub-flow (SPEC.md §5.5).
  *
  * Four steps plus the offline "pending" variant of Step 2, driven by a
  * `step` prop the parent controls (server-state transitions belong to
  * TanStack Query per §11.2 — this component only renders whichever step
- * it's told to). Step 3b is this task's cited "error" screen-state.
+ * it's told to). Step 3b is this task's cited "error" screen-state —
+ * rendered via the shared `ErrorState` component (Task 4C, §11.7) so its
+ * copy stays in sync with every other error surface in the app; this
+ * component still owns the `failureReason` prop (connection vs. push)
+ * since that distinction is specific to this flow (§4.4/§5.5).
  */
 export interface ZoteroCollection {
   key: string;
@@ -37,6 +43,15 @@ export interface ZoteroPushFlowProps {
   /** Distinguishes connection failure from push failure copy (§5.5's two
    *  distinct message variants sharing the Step 3b layout). */
   failureReason?: "connection" | "push";
+  /** Task 4B post-review fix: true while a push request is actually in
+   *  flight (`useZoteroPush().isPending`). Disables Save/Cancel (choose_
+   *  collection step) and Retry (failure step) so a rapid double-click
+   *  can never fire two concurrent `POST /zotero/push` requests for the
+   *  same PMIDs (the backend has no idempotency key — a duplicate
+   *  request means duplicate items in the user's real Zotero library),
+   *  and so Cancel can't dismiss the modal while a write that already
+   *  started is still landing. */
+  isSaving?: boolean;
 }
 
 export function ZoteroPushFlow({
@@ -54,6 +69,7 @@ export function ZoteroPushFlow({
   onDone,
   isOffline = false,
   failureReason = "push",
+  isSaving = false,
 }: ZoteroPushFlowProps) {
   if (step === "connect") {
     return (
@@ -106,15 +122,21 @@ export function ZoteroPushFlow({
           />
         ) : null}
         <div className="flex gap-2">
-          <button type="button" onClick={onCancel} className="rounded border border-slate-300 px-4 py-2">
+          <button
+            type="button"
+            onClick={onCancel}
+            disabled={isSaving}
+            className="rounded border border-slate-300 px-4 py-2 disabled:cursor-not-allowed disabled:text-slate-400"
+          >
             Cancel
           </button>
           {isOffline ? (
             <button
               type="button"
               onClick={onRetry}
+              disabled={isSaving}
               data-testid="zotero-pending-retry"
-              className="rounded bg-slate-300 px-4 py-2 text-slate-700"
+              className="rounded bg-slate-300 px-4 py-2 text-slate-700 disabled:cursor-not-allowed"
             >
               Pending — will retry when back online (Retry now)
             </button>
@@ -122,9 +144,10 @@ export function ZoteroPushFlow({
             <button
               type="button"
               onClick={onSave}
-              className="rounded bg-slate-900 px-4 py-2 font-medium text-white"
+              disabled={isSaving}
+              className="rounded bg-slate-900 px-4 py-2 font-medium text-white disabled:cursor-not-allowed disabled:bg-slate-400"
             >
-              Save
+              {isSaving ? "Saving…" : "Save"}
             </button>
           )}
         </div>
@@ -145,27 +168,25 @@ export function ZoteroPushFlow({
     );
   }
 
-  // step === "failure" — this task's cited "error" screen state (§5.5 3b).
-  const message =
-    failureReason === "connection"
-      ? "⚠ Couldn't connect to Zotero (network error). Nothing was lost — your list is unchanged."
-      : "⚠ Couldn't save to Zotero (network error). Nothing was lost — your list is unchanged.";
-
+  // step === "failure" — this task's cited "error" screen state (§5.5 3b),
+  // rendered through the shared ErrorState component (Task 4C) so the
+  // connection-vs-push distinction and the CSV-fallback affordance stay
+  // consistent with every other error surface in the app.
   return (
-    <div
-      className="flex flex-col gap-3 p-4 text-slate-900"
-      data-testid="zotero-step-failure"
-      role="alert"
-    >
-      <p>{message}</p>
-      <div className="flex gap-2">
-        <button type="button" onClick={onRetry} className="rounded bg-slate-900 px-4 py-2 font-medium text-white">
-          Retry
-        </button>
-        <button type="button" onClick={onDownloadCsv} className="rounded border border-slate-300 px-4 py-2">
-          Download CSV
-        </button>
-      </div>
+    <div data-testid="zotero-step-failure">
+      <ErrorState
+        context="zotero_push"
+        error={{
+          code: failureReason === "connection" ? "zotero_not_connected" : "internal_error",
+          message:
+            failureReason === "connection"
+              ? "Couldn't verify your Zotero login."
+              : "The push to Zotero didn't go through.",
+        }}
+        onRetry={onRetry}
+        retryDisabled={isSaving}
+        onDownloadCsv={onDownloadCsv}
+      />
     </div>
   );
 }

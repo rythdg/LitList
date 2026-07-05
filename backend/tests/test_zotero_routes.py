@@ -15,6 +15,7 @@ import json
 from pathlib import Path
 from typing import Any
 from unittest.mock import patch
+from urllib.parse import parse_qs, urlsplit
 
 import pytest
 import responses
@@ -68,7 +69,9 @@ def _configured_client_credentials(monkeypatch: pytest.MonkeyPatch) -> None:
         "https://litlist.example/api/v1/zotero/auth/callback",
     )
     monkeypatch.setattr(
-        oauth.settings, "zotero_post_auth_redirect_url", "https://litlist.example/?zotero=connected"
+        oauth.settings,
+        "zotero_post_auth_redirect_url",
+        "https://litlist.example/oauth/zotero/callback",
     )
 
 
@@ -87,6 +90,19 @@ def _make_app() -> FastAPI:
 
 def _client() -> TestClient:
     return TestClient(_make_app(), base_url="https://testserver")
+
+
+def _callback_redirect_params(location: str) -> dict[str, str]:
+    """Every `GET /zotero/auth/callback` outcome (success and failure
+    alike) is a redirect to the frontend's fixed `/oauth/zotero/callback`
+    route with `status`/`code`/`message` query params (Task 4B's fix for
+    the previously-unpinned redirect contract — see CONTRACTS.md) — this
+    parses those params back out for assertions rather than each test
+    re-implementing `urlsplit`/`parse_qs`."""
+    split = urlsplit(location)
+    base = f"{split.scheme}://{split.netloc}{split.path}"
+    assert base == oauth.settings.zotero_post_auth_redirect_url
+    return {k: v[0] for k, v in parse_qs(split.query).items()}
 
 
 def _only_session_id(db_engine) -> str:
@@ -126,8 +142,14 @@ def test_callback_rejects_session_mismatch(db_engine) -> None:
         follow_redirects=False,
     )
 
-    assert callback_response.status_code == 403
-    assert callback_response.json()["error"]["code"] == "zotero_session_mismatch"
+    # Task 4B fix: this is a real browser navigation (Zotero bounces the
+    # user here directly), so failure is a redirect back into the app
+    # (carrying the error code/message as query params) rather than a raw
+    # JSON body the browser would render as a dead end.
+    assert callback_response.status_code == 302
+    params = _callback_redirect_params(callback_response.headers["location"])
+    assert params["status"] == "error"
+    assert params["code"] == "zotero_session_mismatch"
 
     with DBSession(db_engine) as db:
         assert db.exec(select(ZoteroConnection)).first() is None
@@ -169,7 +191,10 @@ def test_successful_callback_stores_encrypted_connection_and_rotates_session(db_
         )
 
     assert callback_response.status_code == 302
-    assert callback_response.headers["location"] == oauth.settings.zotero_post_auth_redirect_url
+    params = _callback_redirect_params(callback_response.headers["location"])
+    assert params["status"] == "success"
+    assert "code" not in params
+    assert "message" not in params
 
     with DBSession(db_engine) as db:
         rows = db.exec(select(ZoteroConnection)).all()
@@ -265,6 +290,27 @@ def test_callback_failure_between_connection_insert_and_rotation_is_atomic(
 # ---------------------------------------------------------------------
 
 
+def test_start_auth_redirects_to_frontend_error_when_zotero_request_token_fails(
+    db_engine,
+) -> None:
+    """`GET /zotero/auth/start` is also a real-browser-navigation endpoint
+    (the "Connect to Zotero" button does a full navigation here, not a
+    `fetch`) — a failure here must redirect back into the app the same
+    way `auth/callback`'s failures do, not return a raw JSON body the
+    browser would render as a dead end (Task 4B fix)."""
+    SQLModel.metadata.create_all(db_engine)
+    client = _client()
+
+    with responses.RequestsMock() as rsps:
+        rsps.add(responses.POST, oauth.ZOTERO_REQUEST_TOKEN_URL, status=503)
+        start_response = client.get("/zotero/auth/start", follow_redirects=False)
+
+    assert start_response.status_code == 302
+    params = _callback_redirect_params(start_response.headers["location"])
+    assert params["status"] == "error"
+    assert params["code"] == "service_unavailable"
+
+
 def test_callback_returns_service_unavailable_when_zotero_is_unreachable(db_engine) -> None:
     SQLModel.metadata.create_all(db_engine)
     client = _client()
@@ -286,8 +332,12 @@ def test_callback_returns_service_unavailable_when_zotero_is_unreachable(db_engi
             follow_redirects=False,
         )
 
-    assert callback_response.status_code == 503
-    assert callback_response.json()["error"]["code"] == "service_unavailable"
+    # Task 4B fix: redirect (with the error carried as query params),
+    # not a raw JSON 503 — see `_callback_redirect_params`'s docstring.
+    assert callback_response.status_code == 302
+    params = _callback_redirect_params(callback_response.headers["location"])
+    assert params["status"] == "error"
+    assert params["code"] == "service_unavailable"
     with DBSession(db_engine) as db:
         assert db.exec(select(ZoteroConnection)).first() is None
 

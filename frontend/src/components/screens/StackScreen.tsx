@@ -8,10 +8,12 @@
  * call shapes from different input methods.
  */
 import { useEffect } from "react";
+import { motion } from "framer-motion";
+import { useSwipeToDecide } from "../../gestures/useSwipeToDecide";
 import { SegmentedAbstract } from "./SegmentedAbstract";
 import { isRetracted, type AbstractSegment, type Paper } from "./types";
 
-export type DecisionSource = "tap" | "keyboard";
+export type DecisionSource = "swipe" | "tap" | "keyboard";
 
 export interface StackScreenProps {
   currentPaper: Paper;
@@ -33,12 +35,21 @@ export interface StackScreenProps {
    *  e.g. "Now playing: <title>" or "Marked interested". Parent owns the
    *  wording/timing; this component just renders it into a live region. */
   liveAnnouncement?: string;
+  /** True while the caller's decision function (§11.4 — PATCH +
+   *  optimistic update, `App.tsx`'s `decide()`) is still in flight for
+   *  this card, e.g. `updateDecision.isPending`. Threaded straight
+   *  through to `useSwipeToDecide`'s `disabled` option so a fast
+   *  double-swipe/double-tap/double-keypress can't fire a second
+   *  decision for the same paper (adversarial review, "TASK 4A REVIEW" —
+   *  the hook's own guard existed and was tested but nothing ever wired
+   *  this through). */
+  isDecisionPending?: boolean;
 }
 
 function metadataLine(paper: Paper): string {
   const parts: string[] = [];
   if (paper.last_author) {
-    parts.push(`${paper.last_author.last_name} et al.`);
+    parts.push(`${paper.last_author} et al.`);
   }
   if (paper.journal) parts.push(paper.journal);
   if (paper.pub_date) parts.push(paper.pub_date);
@@ -58,17 +69,27 @@ export function StackScreen({
   onOpenSearch,
   onOpenSaved,
   liveAnnouncement,
+  isDecisionPending = false,
 }: StackScreenProps) {
-  // §13.1 keyboard shortcuts, routed through the same single decision
-  // function/callbacks as the tap controls below — never a divergent path.
+  // §11.4/§15.10: swipe (drag), tap, and keyboard are three triggers into
+  // one function — `triggerDecision`/the drag gesture's own commit both
+  // funnel into `useSwipeToDecide`'s single `commitExit`, which plays the
+  // same exit animation and then calls `onDecide` (the real decision
+  // function, owned by the caller) regardless of which input fired it.
+  const { rotate, likeOpacity, nopeOpacity, controls, dragProps, triggerDecision } =
+    useSwipeToDecide({ onDecide, disabled: isDecisionPending });
+
+  // §13.1 keyboard shortcuts, routed through the exact same
+  // `triggerDecision` path as the tap controls below — never a divergent
+  // path from swipe.
   useEffect(() => {
     function handleKeyDown(event: KeyboardEvent) {
       switch (event.key) {
         case "ArrowRight":
-          onDecide("interested", "keyboard");
+          triggerDecision("interested", "keyboard");
           break;
         case "ArrowLeft":
-          onDecide("not_interested", "keyboard");
+          triggerDecision("not_interested", "keyboard");
           break;
         case " ":
         case "Spacebar":
@@ -87,7 +108,7 @@ export function StackScreen({
     }
     document.addEventListener("keydown", handleKeyDown);
     return () => document.removeEventListener("keydown", handleKeyDown);
-  }, [onDecide, onTogglePlay, onOpenSearch, onOpenSaved]);
+  }, [triggerDecision, onTogglePlay, onOpenSearch, onOpenSaved]);
 
   const retracted = isRetracted(currentPaper);
 
@@ -106,7 +127,30 @@ export function StackScreen({
         ⌄ swipe down for search
       </button>
 
-      <div className="flex flex-1 flex-col gap-3" data-testid="current-card">
+      <motion.div
+        className="relative flex flex-1 touch-pan-y flex-col gap-3"
+        data-testid="current-card"
+        style={{ rotate }}
+        animate={controls}
+        {...dragProps}
+      >
+        <motion.span
+          aria-hidden="true"
+          data-testid="like-overlay"
+          className="pointer-events-none absolute right-2 top-2 rounded border-2 border-emerald-500 px-2 py-1 text-sm font-bold text-emerald-600"
+          style={{ opacity: likeOpacity }}
+        >
+          ♥ INTERESTED
+        </motion.span>
+        <motion.span
+          aria-hidden="true"
+          data-testid="nope-overlay"
+          className="pointer-events-none absolute left-2 top-2 rounded border-2 border-red-500 px-2 py-1 text-sm font-bold text-red-600"
+          style={{ opacity: nopeOpacity }}
+        >
+          ✕ SKIP
+        </motion.span>
+
         {retracted ? (
           <span
             role="status"
@@ -143,12 +187,12 @@ export function StackScreen({
             Next: &quot;{nextPaper.title}&quot;
           </div>
         ) : null}
-      </div>
+      </motion.div>
 
       <div className="flex justify-center gap-4">
         <button
           type="button"
-          onClick={() => onDecide("not_interested", "tap")}
+          onClick={() => triggerDecision("not_interested", "tap")}
           aria-label="Not interested"
           className="rounded-full border border-slate-300 px-4 py-2"
         >
@@ -156,7 +200,7 @@ export function StackScreen({
         </button>
         <button
           type="button"
-          onClick={() => onDecide("interested", "tap")}
+          onClick={() => triggerDecision("interested", "tap")}
           aria-label="Interested"
           className="rounded-full border border-slate-300 px-4 py-2"
         >

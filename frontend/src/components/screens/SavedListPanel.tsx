@@ -16,9 +16,8 @@ export interface SavedListPanelProps {
 }
 
 function metadataLine(paper: Paper): string {
-  const lastName = paper.last_author?.last_name ?? paper.authors[0]?.last_name;
-  const year = paper.pub_date.split(" ")[0];
-  return [lastName ? `${lastName} et al.` : null, year]
+  const year = paper.pub_date?.split(" ")[0];
+  return [paper.last_author ? `${paper.last_author} et al.` : null, year]
     .filter(Boolean)
     .join(" · ");
 }

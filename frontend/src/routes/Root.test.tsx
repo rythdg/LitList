@@ -1,6 +1,7 @@
 import { render, screen } from '@testing-library/react';
 import { afterEach, describe, expect, it } from 'vitest';
 import { Root } from './Root';
+import { createTestQueryClient, wrapperWithClient } from '../api/testUtils';
 
 function setLocation(pathAndQuery: string) {
   window.history.replaceState({}, '', pathAndQuery);
@@ -13,7 +14,8 @@ describe('Root routing (§11.6 — one real route, no general router)', () => {
 
   it('renders the main app shell at the home path', () => {
     setLocation('/');
-    render(<Root />);
+    const client = createTestQueryClient();
+    render(<Root />, { wrapper: wrapperWithClient(client) });
     expect(screen.getByText('LitList')).toBeInTheDocument();
   });
 
@@ -25,7 +27,8 @@ describe('Root routing (§11.6 — one real route, no general router)', () => {
 
   it('renders the main app shell for any other path (no 404 route)', () => {
     setLocation('/some/unrelated/path');
-    render(<Root />);
+    const client = createTestQueryClient();
+    render(<Root />, { wrapper: wrapperWithClient(client) });
     expect(screen.getByText('LitList')).toBeInTheDocument();
   });
 });

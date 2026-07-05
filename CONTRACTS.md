@@ -292,32 +292,156 @@ is **not** an error — still `204`, idempotently.
 
 ---
 
-## 5. Queue/Saved item shape's `retracted` field
+## 5. Queue/Saved/SearchSettings response shapes
 
-`GET /api/v1/queue`, `POST /api/v1/search`, and `GET /api/v1/saved`
-(SPEC.md §10.4) each return a list of paper-in-context objects
-(`QueueItem` in `backend/app/routes/search.py`, `SavedItem` in
-`backend/app/routes/saved.py`) — these two shapes aren't otherwise pinned
-here since they're internal to this backend/frontend pair and not shared
-with a third integration the way the three shapes above are, but the
-field name below is pinned specifically because Task 4A (frontend core-
-loop wiring) needs to know it without guessing: both shapes carry a
-`retracted: bool` field, sourced from `Paper.retracted` (SPEC.md §13.4's
-"Retracted Publication" flag, extracted from EFetch's `PublicationType`
-list by Task 1B/persisted by Task 3A).
+`GET /api/v1/queue`, `POST /api/v1/search`, `GET /api/v1/saved`, and
+`GET /api/v1/search/settings` (SPEC.md §10.4). Originally left unpinned
+here ("internal to this backend/frontend pair, not shared with a third
+integration") with only the `retracted: bool` field name called out —
+that gap let Task 2B and Task 2C each independently invent a shape
+*neither* of which matched what Task 3A actually shipped (nested
+`{paper: {...}}` wrappers with a full `authors[]` array that the backend
+never sends at this layer, a `decided_at` field the backend doesn't
+return, a missing `total_count`). Found and fixed during Task 4A's
+wiring pass; pinning the *real*, already-tested backend shape here now
+so this doesn't happen again for whoever wires the remaining unpinned
+shapes (e.g. `/zotero/collections`).
 
-**Important caveat for Task 4A:** `retracted` can only be accurate once
-`GET /api/v1/papers/{pmid}/abstract` has actually run EFetch for that
-PMID at least once (§7.1's two-stage fetch strategy — `POST /search`'s
-own `QueueItem`s are built from ESummary alone, which carries no
-`PublicationType` data). `retracted: false` on a freshly-searched queue
-item therefore means "not known to be retracted yet," not a confirmed
-guarantee — the same lazy-population caveat SPEC.md §7.6 already
-describes for `citation_count`. The frontend's "⚠ Retracted" badge
-(`StackScreen.tsx`) should treat this the same way it already treats a
-citation count that hasn't loaded yet: render nothing distinctive until
-the flag is confirmed `true`, never render a false "not retracted"
-assurance.
+**These are flat objects — no nested `paper`/`author` sub-object, no
+`authors[]` array.** `last_author` is a single pre-formatted display
+string (PubMed ESummary's `LastAuthor` field, e.g. `"Chen W"`), not an
+object — there is no full-author-list source available at this layer
+(only `GET /papers/{pmid}/abstract`'s EFetch-backed response has that,
+and it's out of scope for the queue/saved list views per §7.1's
+two-stage fetch strategy).
+
+### Shape
+
+```ts
+interface QueueItem {
+  pmid: string;
+  position: number;
+  decision: "pending" | "interested" | "not_interested";
+  title: string;
+  last_author: string | null;
+  journal: string | null;
+  pub_date: string | null;
+  doi: string | null;
+  citation_count: number | null;
+  /** SPEC.md §13.4's "⚠ Retracted" badge source, sourced from
+   *  `Paper.retracted`. See caveat below. */
+  retracted: boolean;
+}
+
+interface QueueResponse {
+  items: QueueItem[];
+  /** Total PubMed result count for the current query (§7.9's pagination
+   *  bookkeeping) — not merely `items.length`. */
+  total_count: number;
+  has_more: boolean;
+}
+
+/** Same flat shape as `QueueItem` minus `decision` (always
+ *  `"interested"` by construction — this endpoint only ever returns
+ *  `interested` rows) — `position` is retained (the original queue
+ *  position, not a saved-list-specific one). There is no `decided_at`
+ *  field. */
+interface SavedItem {
+  pmid: string;
+  title: string;
+  last_author: string | null;
+  journal: string | null;
+  pub_date: string | null;
+  doi: string | null;
+  citation_count: number | null;
+  position: number;
+  retracted: boolean;
+}
+
+interface SavedListResponse {
+  items: SavedItem[];
+}
+
+interface SearchSettingsResponse {
+  /** `null` when no search has been run yet this visit (§3.5's pre-fill
+   *  behavior) — not an empty string. */
+  query: string | null;
+  sort: "relevance" | "recency" | "citations";
+  read_aloud_fields: ("last_author" | "journal" | "pub_date")[];
+  default_swipe_behavior: "interested" | "not_interested";
+  speed: number;
+}
+```
+
+**Important caveat for `retracted` (both `QueueItem` and `SavedItem`):**
+`retracted` can only be accurate once `GET /api/v1/papers/{pmid}/abstract`
+has actually run EFetch for that PMID at least once (§7.1's two-stage
+fetch strategy — `POST /search`'s own `QueueItem`s are built from
+ESummary alone, which carries no `PublicationType` data). `retracted:
+false` on a freshly-searched queue item therefore means "not known to be
+retracted yet," not a confirmed guarantee — the same lazy-population
+caveat SPEC.md §7.6 already describes for `citation_count`. The
+frontend's "⚠ Retracted" badge (`StackScreen.tsx`/`SavedListPanel.tsx`)
+should treat this the same way it already treats a citation count that
+hasn't loaded yet: render nothing distinctive until the flag is
+confirmed `true`, never render a false "not retracted" assurance.
+
+---
+
+## 6. Zotero OAuth callback redirect (query-param shape)
+
+`GET /api/v1/zotero/auth/start` and `GET /api/v1/zotero/auth/callback`
+(SPEC.md §8.2, §11.6). Both are hit by a **real browser navigation**
+(the "Connect to Zotero" button is a full navigation, not a `fetch`;
+Zotero itself redirects the user's browser to the callback URL) — so
+every outcome, success or failure, must be a redirect back into the
+frontend's one real URL-based route
+(`frontend/src/routes/paths.ts`'s `ZOTERO_OAUTH_CALLBACK_PATH`,
+`/oauth/zotero/callback`, Task 2A) rather than a JSON body, which the
+browser would otherwise render as an unstyled dead end with no way back
+into the app.
+
+**This was a real, unpinned contract gap found during Task 4B's
+wiring**, not a hypothetical: Task 2A's frontend built
+`ZoteroCallbackRoute.tsx` against an assumed `?status=success` /
+`?status=error&code=...&message=...` shape (flagged explicitly in its
+own build-log COMPLETE entry as "confirm or correct against
+CONTRACTS.md"), while Task 3B's original backend implementation
+independently redirected to the SPA's home path with an unrelated
+`?zotero=connected` param on success, and returned a raw
+`{"error": {...}}` JSON body (no redirect at all) on failure — neither
+side matched the other, and CONTRACTS.md didn't pin either. Fixed by
+Task 4B: the backend now redirects to `settings.
+zotero_post_auth_redirect_url` (the frontend's callback path) with the
+query shape below in every case, matching what 2A had already built.
+
+### Shape
+
+```
+GET {zotero_post_auth_redirect_url}?status=success
+GET {zotero_post_auth_redirect_url}?status=error&code=<ApiErrorCode>&message=<url-encoded string>
+```
+
+- `status`: `"success"` | `"error"`. No other value is ever sent; the
+  frontend treats anything else (e.g. a missing/malformed param, from
+  someone hitting this URL directly) as `"unknown"` and shows a generic
+  "still connecting" holding state (already built by Task 2A).
+- `code`/`message`: present only when `status=error`; reuse this
+  document's §2 `ApiErrorCode`/message fields verbatim rather than a
+  one-off shape. Known values as of Task 4B: `zotero_session_mismatch`
+  (403-equivalent — the OAuth request token didn't match the session
+  that started the handshake, §10.2's binding primitive) and
+  `service_unavailable` (Zotero's request-token or access-token step
+  failed).
+- On success, the backend has already set the rotated session cookie
+  (§9.1) on the redirect response itself — the frontend never needs to
+  make a follow-up call just to "confirm" the connection; the next real
+  data fetch (e.g. `GET /zotero/collections`) will simply succeed.
+
+Implemented in `backend/app/routes/zotero.py`'s `_callback_redirect`
+helper; consumed by `frontend/src/routes/zoteroCallbackParams.ts`
+(unchanged by this fix — its parsing already matched this shape, since
+it's what 2A had assumed) and `ZoteroCallbackRoute.tsx`.
 
 ## Change log
 
@@ -341,3 +465,28 @@ assurance.
   wired into `backend/app/main.py` alongside the rest of Task 3D's
   cross-cutting middleware stack (inbound rate limiting, the global
   exception-shape handler, baseline security headers).
+- **2026-07-05 — Task 4A:** rewrote §5 from a single pinned field name
+  into the full `QueueItem`/`QueueResponse`/`SavedItem`/
+  `SavedListResponse`/`SearchSettingsResponse` shapes, matching the real
+  (already-merged, 187-test-covered) backend response models exactly.
+  This was a genuine drift fix, not a new decision: Task 2B's and Task
+  2C's independently-invented frontend shapes for this "not yet pinned"
+  gap disagreed with the real backend *and* with each other (nested
+  `paper`/`authors[]` wrapper vs. flat object, a fabricated `decided_at`
+  field, a missing `total_count`, a `publication_types[]`-based retracted
+  check predating the already-shipped `retracted: bool` field). Fixed on
+  the frontend only (`frontend/src/api/types.ts`,
+  `frontend/src/components/screens/types.ts`, and every consumer) — no
+  backend change was needed, since the backend was already correct.
+- **2026-07-05 — Task 4B:** added §6, pinning the Zotero OAuth
+  callback/start redirect's query-param shape — a genuine two-sided
+  mismatch (see §6's own explanation), not a one-sided bug: Task 2A's
+  frontend and Task 3B's backend each built a different, unpinned
+  assumption for this exact redirect. Fixed on the backend
+  (`backend/app/routes/zotero.py`'s new `_callback_redirect` helper,
+  `backend/app/config.py`'s `zotero_post_auth_redirect_url` default) to
+  match what the frontend (`zoteroCallbackParams.ts`,
+  `ZoteroCallbackRoute.tsx`) already expected — no frontend change was
+  needed for the redirect shape itself, since 2A's assumption turned out
+  to be the more spec-aligned of the two (§8.2 step 6's "bounces the
+  browser to the fixed in-app post-auth path").

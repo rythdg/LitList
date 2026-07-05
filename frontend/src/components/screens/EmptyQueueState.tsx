@@ -1,8 +1,16 @@
+import { ErrorState } from "../ErrorState";
+
 /**
  * Screen C — Empty results state (SPEC.md §5.3a, §4.3).
  *
  * No queue exists, so the play button is visibly disabled (greyed, no
  * functional tap response); only the swipe-down-to-search path is live.
+ * The "no papers matched" copy is rendered via the shared `ErrorState`/
+ * `errorCopy.ts` (Task 4C, §11.7) `empty_results` context rather than a
+ * second hardcoded copy of the same wording — a zero-result search isn't
+ * a CONTRACTS.md §2-shaped error, but §5.3a is still one of the contexts
+ * BuildPlan.md's Task 4C line names for this shared component, so it
+ * goes through the same single copy source as every other context.
  */
 export interface EmptyQueueStateProps {
   query: string;
@@ -15,18 +23,13 @@ export function EmptyQueueState({ query, onOpenSearch }: EmptyQueueStateProps) {
       <p className="text-slate-400" aria-hidden="true">
         (no results)
       </p>
-      <p>
-        No papers matched
-        <br />
-        &quot;{query}&quot;.
-      </p>
-      <button
-        type="button"
-        onClick={onOpenSearch}
-        className="text-sm text-slate-500"
-      >
-        Swipe down to try a different search.
-      </button>
+      <ErrorState
+        context="empty_results"
+        query={query}
+        onRetry={onOpenSearch}
+        retryLabel="Swipe down to try a different search."
+        className="items-center border-none p-0 text-center"
+      />
       <button
         type="button"
         disabled

@@ -31,7 +31,7 @@ describe("useUpdateDecision (§10.4 PATCH /decisions/{pmid}, §11.2 optimistic u
     });
 
     await waitFor(() => {
-      const item = queueResult.current.data?.items.find((i) => i.paper.pmid === "38279812");
+      const item = queueResult.current.data?.items.find((i) => i.pmid === "38279812");
       expect(item?.decision).toBe("interested");
     });
 
@@ -59,7 +59,7 @@ describe("useUpdateDecision (§10.4 PATCH /decisions/{pmid}, §11.2 optimistic u
 
     await waitFor(() => expect(decisionResult.current.isError).toBe(true));
 
-    const item = queueResult.current.data?.items.find((i) => i.paper.pmid === "38279812");
+    const item = queueResult.current.data?.items.find((i) => i.pmid === "38279812");
     expect(item?.decision).toBe("pending");
   });
 });

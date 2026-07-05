@@ -28,7 +28,7 @@ export function useUpdateDecision() {
         queryClient.setQueryData<QueueResponse>(queryKeys.queue, {
           ...previousQueue,
           items: previousQueue.items.map((item) =>
-            item.paper.pmid === pmid ? { ...item, decision } : item,
+            item.pmid === pmid ? { ...item, decision } : item,
           ),
         });
       }

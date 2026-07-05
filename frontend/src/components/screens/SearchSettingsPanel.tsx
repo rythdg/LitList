@@ -5,15 +5,15 @@
  * Zustand as in-progress unsaved edits, per §11.2) and passes it down
  * along with change handlers. No TanStack Query / network calls here.
  */
-import type { SearchSettings, SortOption } from "./types";
+import { ErrorState } from "../ErrorState";
+import type { ApiErrorBody } from "../../api/types";
+import type { ReadAloudField, SearchSettings, SortOption } from "./types";
 
 export interface SearchSettingsPanelProps {
   settings: SearchSettings;
   onQueryChange: (query: string) => void;
   onSortChange: (sort: SortOption) => void;
-  onReadAloudFieldToggle: (
-    field: keyof SearchSettings["read_aloud_fields"],
-  ) => void;
+  onReadAloudFieldToggle: (field: ReadAloudField) => void;
   onDefaultSwipeBehaviorChange: (
     value: SearchSettings["default_swipe_behavior"],
   ) => void;
@@ -23,6 +23,14 @@ export interface SearchSettingsPanelProps {
   /** §5.2's inline spinner near the search field — never a full-screen
    *  blocker, per §5.6's "loading states never block gesture input." */
   isLoading?: boolean;
+  /** §4.3's empty/failed-search error surface, rendered via the shared
+   *  `ErrorState` component (Task 4C) — `null`/`undefined` when the most
+   *  recent search attempt (if any) succeeded. */
+  error?: ApiErrorBody | null;
+  /** §4.5: starting a new search while offline surfaces the "you're
+   *  offline" state rather than failing silently or hanging. */
+  isOffline?: boolean;
+  onRetry?: () => void;
 }
 
 export function SearchSettingsPanel({
@@ -35,6 +43,9 @@ export function SearchSettingsPanel({
   onClose,
   onStart,
   isLoading = false,
+  error = null,
+  isOffline = false,
+  onRetry,
 }: SearchSettingsPanelProps) {
   const queryIsBlank = settings.query.trim().length === 0;
 
@@ -96,7 +107,7 @@ export function SearchSettingsPanel({
         <label className="flex items-center gap-2 text-sm">
           <input
             type="checkbox"
-            checked={settings.read_aloud_fields.last_author}
+            checked={settings.read_aloud_fields.includes("last_author")}
             onChange={() => onReadAloudFieldToggle("last_author")}
           />
           Last author
@@ -104,15 +115,7 @@ export function SearchSettingsPanel({
         <label className="flex items-center gap-2 text-sm">
           <input
             type="checkbox"
-            checked={settings.read_aloud_fields.all_authors}
-            onChange={() => onReadAloudFieldToggle("all_authors")}
-          />
-          All authors
-        </label>
-        <label className="flex items-center gap-2 text-sm">
-          <input
-            type="checkbox"
-            checked={settings.read_aloud_fields.journal}
+            checked={settings.read_aloud_fields.includes("journal")}
             onChange={() => onReadAloudFieldToggle("journal")}
           />
           Journal
@@ -120,7 +123,7 @@ export function SearchSettingsPanel({
         <label className="flex items-center gap-2 text-sm">
           <input
             type="checkbox"
-            checked={settings.read_aloud_fields.pub_date}
+            checked={settings.read_aloud_fields.includes("pub_date")}
             onChange={() => onReadAloudFieldToggle("pub_date")}
           />
           Publication date
@@ -179,6 +182,10 @@ export function SearchSettingsPanel({
           Podcast (soon)
         </label>
       </fieldset>
+
+      {error || isOffline ? (
+        <ErrorState context="generic" error={error} isOffline={isOffline} onRetry={onRetry} />
+      ) : null}
 
       <button
         type="button"

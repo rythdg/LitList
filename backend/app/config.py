@@ -49,8 +49,18 @@ class Settings(BaseSettings):
     # (see BuildPlan.md Task 5A); the default here is a local-dev value.
     zotero_callback_url: str = "http://localhost:8000/api/v1/zotero/auth/callback"
     # Fixed in-app path the user lands on after the callback finishes
-    # (§8.2 step 6, §11.6) — again never attacker-influenceable.
-    zotero_post_auth_redirect_url: str = "http://localhost:5173/?zotero=connected"
+    # (§8.2 step 6, §11.6) — again never attacker-influenceable. Must be
+    # the frontend's real URL-based route (Task 2A's
+    # `ZOTERO_OAUTH_CALLBACK_PATH`, `/oauth/zotero/callback`) — the
+    # callback route below appends `?status=success` or `?status=error&
+    # code=...&message=...` (CONTRACTS.md's OAuth-callback-redirect
+    # section) so that route can render success/failure without ever
+    # seeing raw JSON. This was previously pointed at the SPA's home path
+    # with an unrelated `?zotero=connected` param that the frontend's
+    # actual callback route never parsed — a real, unpinned
+    # frontend/backend contract mismatch fixed by Task 4B; see that
+    # task's build-log PIVOT entry.
+    zotero_post_auth_redirect_url: str = "http://localhost:5173/oauth/zotero/callback"
 
     # --- PubMed E-utilities (Task 1B, SPEC.md §7.7) ---
     # Free NCBI API key — raises the outbound rate ceiling from 3 req/s to

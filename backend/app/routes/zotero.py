@@ -32,6 +32,7 @@ from __future__ import annotations
 
 import logging
 from typing import Any
+from urllib.parse import urlencode
 
 from fastapi import APIRouter, Depends, Query, Response
 from fastapi.responses import JSONResponse, RedirectResponse
@@ -82,6 +83,28 @@ def _error_response(status_code: int, code: str, message: str) -> JSONResponse:
     )
 
 
+def _callback_redirect(
+    status: str, *, code: str | None = None, message: str | None = None
+) -> RedirectResponse:
+    """Builds the browser-facing redirect target for `GET /zotero/auth/
+    callback` (§8.2 step 6, CONTRACTS.md's OAuth-callback-redirect
+    section). This route is hit by a real browser navigation (Zotero
+    bounces the user here directly), never by `fetch` — so every outcome,
+    success *and* failure, must be a redirect to the frontend's fixed
+    `/oauth/zotero/callback` route (Task 2A) rather than a raw JSON body,
+    which the browser would otherwise render as an unstyled page with no
+    way back into the app. Reuses the pinned `ApiError` `code`/`message`
+    fields as query params on failure rather than inventing a new shape.
+    """
+    params: dict[str, str] = {"status": status}
+    if code is not None:
+        params["code"] = code
+    if message is not None:
+        params["message"] = message
+    url = f"{oauth.post_auth_redirect_url()}?{urlencode(params)}"
+    return RedirectResponse(url=url, status_code=302)
+
+
 def _client_error_response(exc: zotero_client.ZoteroClientError) -> JSONResponse:
     """Maps `app.integrations.zotero`'s `ZoteroClientError.error_code`
     (already a safe, pre-written `str(exc)` per that module's own
@@ -105,7 +128,14 @@ def start_auth(session: SessionRow = _CurrentSession) -> Response:
         authorize_url = oauth.start_handshake(session.session_id)
     except oauth.ZoteroOAuthProviderError:
         logger.exception("Zotero OAuth start_handshake failed")
-        return _error_response(503, "service_unavailable", _SERVICE_UNAVAILABLE_MESSAGE)
+        # Same rationale as `auth_callback`'s error paths below: this
+        # route is hit by a real browser navigation (the "Connect to
+        # Zotero" button does a full navigation here, not a `fetch`), so
+        # a raw JSON error body would render as an unstyled dead end
+        # instead of bouncing the user back into the app.
+        return _callback_redirect(
+            "error", code="service_unavailable", message=_SERVICE_UNAVAILABLE_MESSAGE
+        )
     return RedirectResponse(url=authorize_url, status_code=302)
 
 
@@ -119,15 +149,27 @@ def auth_callback(
     """OAuth callback (§8.2 step 4). Must arrive on the *same* session
     cookie that started the handshake — `complete_handshake` enforces the
     request-token-to-session binding (§10.2's addendum) and raises
-    `ZoteroSessionMismatchError` otherwise, which this route rejects as
-    `zotero_session_mismatch` (403) rather than proceeding.
+    `ZoteroSessionMismatchError` otherwise.
+
+    This route is hit by a real browser navigation (Zotero redirects the
+    user's browser here directly), never by `fetch` — so every outcome,
+    success or failure, is a `302` redirect to the frontend's fixed
+    `/oauth/zotero/callback` route (Task 2A), never a raw JSON error body
+    (see `_callback_redirect`). A session mismatch redirects with
+    `?status=error&code=zotero_session_mismatch`; an unreachable Zotero
+    redirects with `?status=error&code=service_unavailable`. This was a
+    real, unpinned contract gap as of Tier 2/3 (2A's frontend assumed a
+    redirect shape; 3B's original implementation returned raw JSON on
+    error and redirected to an unrelated URL on success) — fixed by Task
+    4B; see CONTRACTS.md's OAuth-callback-redirect section and this
+    task's build-log PIVOT entry.
 
     On success: Fernet-encrypts the returned credentials (§9.6) before
     persisting a `ZoteroConnection` row (replacing any prior one for this
     session — at most one per §9.2), rotates the session id (§9.1's
     privilege-escalation fix, §8.2 step 5), pushes the rotated cookie onto
     the redirect response, and bounces the browser to the fixed in-app
-    post-auth path (§8.2 step 6).
+    post-auth path with `?status=success` (§8.2 step 6).
 
     **Single atomic transaction (post-review fix).** The `ZoteroConnection`
     insert and the session rotation are one commit, not two: the
@@ -149,10 +191,12 @@ def auth_callback(
     try:
         credentials = oauth.complete_handshake(session.session_id, oauth_token, oauth_verifier)
     except oauth.ZoteroSessionMismatchError as exc:
-        return _error_response(403, "zotero_session_mismatch", str(exc))
+        return _callback_redirect("error", code="zotero_session_mismatch", message=str(exc))
     except oauth.ZoteroOAuthProviderError:
         logger.exception("Zotero OAuth complete_handshake failed")
-        return _error_response(503, "service_unavailable", _SERVICE_UNAVAILABLE_MESSAGE)
+        return _callback_redirect(
+            "error", code="service_unavailable", message=_SERVICE_UNAVAILABLE_MESSAGE
+        )
 
     existing = db.exec(
         select(ZoteroConnection).where(ZoteroConnection.session_id == session.session_id)
@@ -180,7 +224,7 @@ def auth_callback(
     # scoped rows) onto the new session_id and commits once, atomically.
     new_session = rotate_session(db, current_session_row)
 
-    response = RedirectResponse(url=oauth.post_auth_redirect_url(), status_code=302)
+    response = _callback_redirect("success")
     set_session_cookie(response, new_session.session_id)
     return response
 
