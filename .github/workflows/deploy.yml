@@ -60,7 +60,7 @@ jobs:
           VITE_API_BASE_URL: https://litlist-backend.onrender.com/api/v1
 
       - name: Configure Pages
-        uses: actions/configure-pages@v5
+        uses: actions/configure-pages@v6
 
       - name: Upload built dist/ as the Pages artifact
         uses: actions/upload-pages-artifact@v3
