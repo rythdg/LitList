@@ -1,3 +1,79 @@
-# Merge-to-main deploy workflow (BuildPlan.md Task 5B, §12.4): frontend
-# build -> Pages; Render auto-deploys via its own git integration.
-# Deliberately empty at Tier 0 — filled in at Tier 5, Task 5B.
+# Merge-to-main deploy workflow (BuildPlan.md Task 5B, SPEC.md §12.4):
+# frontend build -> GitHub Pages. Render auto-deploys the backend via its
+# own git integration on push to `main` (Task 5A) — no step for that here,
+# by design (§12.4: "no GitHub Action needed for this leg").
+name: Deploy frontend to GitHub Pages
+
+on:
+  push:
+    branches: [main]
+  # Allows a manual re-deploy from the Actions tab without a new commit.
+  workflow_dispatch:
+
+# Only one Pages deploy should ever be in flight at a time; a newer push
+# supersedes an older one rather than queuing behind it.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+jobs:
+  build:
+    name: Build frontend
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build (production, GitHub Pages subpath base)
+        # VITE_BASE_PATH is GitHub-Pages-specific (project site served
+        # from /LitList/, not root) and is set only here, at the CI step
+        # level — never as vite.config.ts's own default — so migrating to
+        # Cloudflare Pages/a custom domain later (§12.2, both root-served)
+        # is genuinely a zero-code-change swap: just drop/change this one
+        # env var in whichever workflow deploys there.
+        run: npm run build
+        env:
+          VITE_BASE_PATH: /LitList/
+
+      - name: Configure Pages
+        uses: actions/configure-pages@v5
+
+      - name: Upload built dist/ as the Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: frontend/dist
+
+  deploy:
+    name: Deploy to GitHub Pages
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
+
+# ---------------------------------------------------------------------
+# HUMAN SETUP REQUIRED (one-time, cannot be done from a workflow file):
+# Settings -> Pages -> "Build and deployment" -> Source -> select
+# "GitHub Actions" (not "Deploy from a branch"). Once set, this workflow
+# publishes to https://rythdg.github.io/LitList/ on every push to main.
+# ---------------------------------------------------------------------

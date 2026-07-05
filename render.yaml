@@ -1,0 +1,56 @@
+# Render Blueprint (BuildPlan.md Task 5A, SPEC.md §12.2/§12.3).
+#
+# This file is imported once, manually, by a human via Render's dashboard
+# ("New +" -> "Blueprint" -> point at this repo) — Render does not act on
+# it automatically just because it exists in the repo. See this task's
+# build-log entry for exactly what the human still needs to do.
+#
+# All secret-bearing env vars are declared with `sync: false` so Render
+# prompts for their real values in its dashboard during/after Blueprint
+# import, instead of requiring (or accepting) real values committed here.
+# Non-secret values (plan tier, health check path, build/start commands)
+# are pinned directly since they aren't sensitive.
+services:
+  - type: web
+    name: litlist-backend
+    runtime: python
+    plan: free
+    region: oregon
+    rootDir: backend
+    # Render's free Python runtime provisions its own venv from this;
+    # installs the backend package (and therefore its pinned runtime
+    # dependencies) via pyproject.toml, matching what CI/local dev use —
+    # no separate requirements.txt to keep in sync.
+    buildCommand: pip install --upgrade pip && pip install .
+    startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /health
+    envVars:
+      # --- Database (app/db.py, SPEC.md §12.1/§12.3) ---
+      - key: TURSO_DATABASE_URL
+        sync: false
+      - key: TURSO_AUTH_TOKEN
+        sync: false
+      # --- Zotero OAuth 1.0a (SPEC.md §8.2/§8.3) ---
+      - key: ZOTERO_CLIENT_KEY
+        sync: false
+      - key: ZOTERO_CLIENT_SECRET
+        sync: false
+      - key: ZOTERO_CALLBACK_URL
+        sync: false
+      - key: ZOTERO_POST_AUTH_REDIRECT_URL
+        sync: false
+      # --- Session/security (SPEC.md §9.1/§9.6/§10.2) ---
+      - key: SESSION_COOKIE_SECRET
+        sync: false
+      - key: TOKEN_ENCRYPTION_KEY
+        sync: false
+      # --- PubMed E-utilities (SPEC.md §7.7) ---
+      - key: NCBI_API_KEY
+        sync: false
+      - key: NCBI_TOOL
+        sync: false
+      - key: NCBI_EMAIL
+        sync: false
+      # --- CORS allow-list (SPEC.md §10.7) ---
+      - key: FRONTEND_ORIGINS
+        sync: false

@@ -1,0 +1,33 @@
+# Dependency vulnerability scanning (BuildPlan.md Task 5B, SPEC.md §12.4):
+# Dependabot opens PRs for known-vulnerable/outdated dependencies on both
+# the backend (pip, pyproject.toml) and frontend (npm, package.json)
+# manifests — supply-chain hygiene for a stack that leans heavily on
+# third-party open-source packages (§10.1/§11.1).
+version: 2
+updates:
+  - package-ecosystem: "pip"
+    directory: "/backend"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 10
+    labels:
+      - "dependencies"
+      - "backend"
+
+  - package-ecosystem: "npm"
+    directory: "/frontend"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 10
+    labels:
+      - "dependencies"
+      - "frontend"
+
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 10
+    labels:
+      - "dependencies"
+      - "ci"

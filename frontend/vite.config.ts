@@ -11,7 +11,24 @@ import { VitePWA } from 'vite-plugin-pwa'
 // already has a server-side cache (Paper, §9.2); TanStack Query's in-memory
 // cache (Task 2C) is what keeps already-fetched papers available offline
 // mid-session, not the service worker.
+//
+// `base` (Task 5B, §12.4): configurable via the VITE_BASE_PATH build-time
+// env var rather than hardcoded, and defaults to root ('/') — the correct
+// value for local dev/preview *and* for §12.2's promised zero-code-change
+// migration to Cloudflare Pages/a custom domain later, both of which serve
+// from root, not a subpath. GitHub Pages is the one deploy target that
+// needs a non-root value, since it serves this repo as a *project* site —
+// https://rythdg.github.io/LitList/ — so every asset URL and the PWA
+// manifest's start_url/scope must be prefixed with the repo name there or
+// asset loading (and SW registration) breaks under that subpath.
+// `.github/workflows/deploy.yml` sets VITE_BASE_PATH=/LitList/ only for
+// its `npm run build` step, specifically because it deploys to GitHub
+// Pages — not baked in here as the repo's default, so switching hosts
+// later is genuinely just a one-line CI env var change, not a code change.
+const base = process.env.VITE_BASE_PATH || '/'
+
 export default defineConfig({
+  base,
   plugins: [
     react(),
     tailwindcss(),
@@ -32,8 +49,8 @@ export default defineConfig({
         theme_color: '#1e293b',
         background_color: '#ffffff',
         display: 'standalone',
-        start_url: '/',
-        scope: '/',
+        start_url: base,
+        scope: base,
         icons: [
           {
             src: 'pwa-192x192.png',
