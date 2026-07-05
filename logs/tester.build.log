@@ -4395,3 +4395,144 @@ non-blocking/single-maintainer-scale by the coordinator and are not part of
 this gate. Tier 5's automated work is unblocked pending only the
 pre-existing, separately-flagged real-remote-PR/gh-auth verification noted
 in the prior tester entry above, which is unrelated to Task 5B itself.
+
+[2026-07-05T23:20:00] LIVE-TEST FIX: DB SCHEMA VERIFY — START
+Verifying senior-backend-developer's live-e2e fix (backend/app/main.py
+lifespan hook for SQLModel.metadata.create_all) against the missing
+DB-schema-on-boot bug. Reading the fix's log COMPLETE entry, main.py,
+db.py, entities.py, conftest.py diff, then independently re-running the
+full backend suite/ruff/mypy and re-doing the fresh-SQLite live-boot
+proof myself, plus a non-vacuousness check by temporarily disabling the
+lifespan wiring.
+
+[2026-07-05T23:40:00] LIVE-TEST FIX: DB SCHEMA VERIFY — COMPLETE
+This is an infra fix, not a §15-tagged feature task, so there's no
+single §15 subsection it maps to — closest is §15.1 (backend
+unit/integration, since the regression is fully exercised by the
+existing backend suite once schema exists) plus the live-boot
+smoke-check the specialist did outside pytest entirely (no §15
+subsection covers "does the app boot against a truly empty DB," which
+is itself worth flagging as a coverage gap in the test plan generally —
+this class of bug, no schema-creation hook, would not have been caught
+by any existing automated test suite, only by manual e2e boot; I did
+not write a new automated regression test for this since the task was
+verification, not authoring, but recommend someone add a
+`test_fresh_boot_creates_schema` test using `with TestClient(app) as
+client:` so the lifespan path itself has automated coverage instead of
+relying on manual live-boot checks each time).
+
+1. Full backend suite: ran `pytest -q` fresh myself (not reusing the
+   specialist's numbers) -> 217 passed, 1 unrelated deprecation warning
+   (httpx/starlette.testclient), 5.86s. Matches the claimed 217/217.
+   `ruff check .` -> "All checks passed!". `mypy app` -> "Success: no
+   issues found in 33 source files." All three confirmed clean myself.
+
+2. Read backend/app/main.py directly. Confirmed:
+   - Genuine `@asynccontextmanager async def lifespan(app: FastAPI) ->
+     AsyncIterator[None]` — NOT the deprecated `@app.on_event(...)`.
+   - Wired via `app = FastAPI(title="LitList API", version="0.1.0",
+     lifespan=lifespan)` — not left unregistered.
+   - Calls `SQLModel.metadata.create_all(get_engine())` where
+     `get_engine` is imported as `from app.db import get_engine` — the
+     same shared singleton (`@lru_cache(maxsize=1)` in app/db.py) used
+     everywhere else in the app, not a second engine instance.
+   - Imports `from app.models import entities as _entities  # noqa:
+     F401` purely for the table-registration side effect before
+     `create_all` runs. Confirmed backend/app/models/entities.py
+     defines exactly 6 `table=True` classes with these
+     `__tablename__`s: `session`, `zotero_connection`,
+     `search_session`, `paper`, `queue_decision`, `zotero_export` — no
+     more, no fewer, and this exact list matches what the specialist's
+     log claims `inspect(get_engine()).get_table_names()` returned
+     against production Turso. Since I did not touch prod Turso myself
+     (per instruction), this is as far as independent cross-checking
+     without new prod writes can go — the log's inspect() output is
+     stated as literal values, not just an assertion of success, and
+     those values are internally consistent with the actual model
+     definitions, so I have no basis to doubt it, but I have NOT
+     independently re-run inspect() against prod myself.
+
+3. Independent local live-boot proof (my own run, not reusing the
+   specialist's artifacts): deleted /tmp/litlist_tester_fresh.db (did
+   not exist beforehand), booted `uvicorn app.main:app` with
+   `TURSO_DATABASE_URL="" TURSO_AUTH_TOKEN=""
+   LOCAL_SQLITE_PATH=/tmp/litlist_tester_fresh.db` on port 8399.
+   `curl -sS -i http://127.0.0.1:8399/api/v1/search/settings` ->
+   `HTTP/1.1 200 OK`, body
+   `{"query":null,"sort":"relevance","read_aloud_fields":[],
+   "default_swipe_behavior":"interested","speed":1.0}`. File grew to
+   61440 bytes (schema created). Killed the process, confirmed no
+   leftover.
+
+   Non-vacuousness check: temporarily edited main.py's
+   `app = FastAPI(...)` line to drop `lifespan=lifespan` (commented
+   nothing else out — the lifespan function body was untouched, only
+   its wiring). Re-ran against a second brand-new empty file
+   (/tmp/litlist_tester_fresh2.db, did not exist beforehand) on port
+   8400: `curl` -> `HTTP/1.1 500 Internal Server Error`, and the
+   uvicorn server log showed the EXACT original error:
+   `sqlalchemy.exc.OperationalError: (sqlite3.OperationalError) no
+   such table: session` on
+   `INSERT INTO session (session_id, created_at, last_seen_at) VALUES
+   (?, ?, ?)`. This proves the fix is genuinely load-bearing, not
+   vacuous. Restored main.py's `lifespan=lifespan` wiring immediately
+   after; `git diff backend/app/main.py` afterward shows only the
+   specialist's original claimed diff, no leftover tester edits.
+   Deleted both temp SQLite files and uvicorn log/pid files afterward.
+
+4. Did NOT write to production Turso myself, per instruction. Read the
+   specialist's log entry critically: it states literal table names
+   returned by `sqlalchemy.inspect(get_engine()).get_table_names()`
+   (`session`, `search_session`, `queue_decision`, `paper`,
+   `zotero_connection`, `zotero_export`) rather than a bare "it
+   worked" claim, and separately documents exact-primary-key cleanup
+   of the two session rows its own curl calls created (verified each
+   id against its own Set-Cookie value first) — this is the same
+   cleanup discipline as Task 5A's own probe-table pattern. Cross-
+   checked those 6 names against entities.py directly: exact match,
+   and entities.py defines exactly 6 tables (no extra table the log's
+   list omits, no listed table absent from the model file).
+
+5. Verified the `env -u` pivot claim myself, independent of the
+   specialist's run: `env -u TURSO_DATABASE_URL -u TURSO_AUTH_TOKEN
+   python -c "from app.config import settings;
+   print(settings.turso_database_url)"` printed the REAL production
+   URL from backend/.env
+   (`libsql://litlist-db-rythdg.aws-ap-south-1.turso.io`) despite the
+   shell-level unset — confirms unsetting does NOT override
+   pydantic-settings' `env_file=".env"` load. Then ran
+   `TURSO_DATABASE_URL="" TURSO_AUTH_TOKEN="" python -c "...")`  and
+   got `''` (empty string, falsy), which is what `_build_connection_url()`
+   in app/db.py checks (`if settings.turso_database_url:`) to correctly
+   fall through to the local SQLite branch. Claim confirmed accurate
+   and independently reproduced.
+
+6. Confirmed via `git diff -- backend/tests/conftest.py` that the only
+   change is an added docstring paragraph explaining why the fixture's
+   own `create_all` call stays load-bearing (TestClient's lifespan only
+   fires when used as `with TestClient(app) as client:`, which this
+   suite's module-level `client = TestClient(app)` instances never do)
+   — zero lines of actual test/fixture code changed. Full suite still
+   217/217 as re-run in step 1, so this is confirmed comment-only with
+   no behavioral change.
+
+No failures found in any of the 6 checks. Coverage gap noted (not a
+failure): no automated regression test exists yet for "app boots with
+schema against a genuinely empty DB" — this bug class was only caught
+by manual e2e testing and would not be caught by re-running the
+existing suite alone, since conftest.py's fixture creates its own
+schema independently of main.py's lifespan path. Recommend a follow-up
+test using `with TestClient(app) as client:` against a fresh in-memory/
+temp-file DB to close this gap, but did not write it myself as this was
+a verification task, not an authoring one, and no §15 subsection
+currently obligates it.
+
+Verdict: FIX VERIFIED. The lifespan hook is genuine, correctly wired,
+uses the shared engine, registers all tables before create_all runs,
+the local live-boot proof and non-vacuousness check both independently
+reproduce, the production Turso claim is internally consistent and
+verifiable-without-new-writes, the env-var pivot claim reproduces
+exactly, and conftest.py's diff is genuinely comment-only with 217/217
+still passing. This closes the production-blocking gap the fix targets,
+though the broader gap of "no automated fresh-boot regression test"
+remains open as a coverage recommendation, not a verification failure.

@@ -2164,3 +2164,111 @@ One SIGNIFICANT finding (real DB hostname committed to git-tracked build
 logs) needs remediation (redact before committing) before this lands on
 main; not blocking for the code itself but should not be ignored given
 this build's credential-leak history.
+
+[2026-07-05T02:15:00] LIVE-TEST FIX: DB SCHEMA REVIEW — START
+Reviewing senior-backend-developer's live-e2e fix (backend/app/main.py
+lifespan hook calling SQLModel.metadata.create_all) and tester's clean
+"DB SCHEMA VERIFY" verdict, per orchestrator's 5-point focus list.
+Reading both logs' COMPLETE/PIVOT entries in full, plus
+backend/app/main.py, backend/app/db.py, backend/tests/test_lifespan_schema.py,
+backend/tests/conftest.py directly. Independently read SQLAlchemy's own
+MetaData.create_all/SchemaGenerator._can_create_table source (installed
+in backend/.venv) rather than trusting either log's characterization of
+"idempotent," since neither log actually traced that implementation.
+
+[2026-07-05T02:40:00] LIVE-TEST FIX: DB SCHEMA REVIEW — COMPLETE
+
+Findings (most severe first):
+
+1. SIGNIFICANT — undocumented TOCTOU race in create_all's checkfirst
+   logic under concurrent boots. Independently read
+   SchemaGenerator._can_create_table (sqlalchemy/sql/ddl.py): checkfirst
+   mode does `not self.dialect.has_table(connection, table.name)` as a
+   separate call, THEN issues a plain `CreateTable` DDL statement with
+   no `IF NOT EXISTS` clause and no shared transaction/lock spanning the
+   two. If two processes (e.g. Render's old+new instance briefly
+   overlapping during a rolling redeploy, or two replicas cold-starting
+   together against a genuinely empty database) both run `lifespan` at
+   nearly the same moment, both can observe `has_table() == False`, then
+   both attempt `CREATE TABLE session (...)`, and the loser gets an
+   unhandled `OperationalError: table session already exists`, crashing
+   that worker's startup. Neither log discusses this scenario or traces
+   the actual DDL SQLAlchemy emits — main.py's docstring's claim that
+   create_all is "safe to run on every process start, including every
+   Render boot" is true only for STEADY STATE (once tables already
+   exist, has_table() short-circuits true and create_all becomes a
+   genuine no-op with no race window). It is NOT proven safe for the
+   *first* concurrent multi-replica boot against a brand-new database —
+   the exact scenario this whole bug fix exists to handle. Concretely
+   not an active risk against the CURRENT production Turso database
+   (tables already exist there per the specialist's own proof #2), but
+   it is an undocumented landmine for any future fresh environment
+   (staging DB, a second Turso instance, a from-scratch redeploy) that
+   boots with more than one replica for the first time. Neither the new
+   regression test nor either log exercises concurrent lifespans.
+
+2. SIGNIFICANT — "idempotent" is accurate but incomplete, and the gap is
+   not flagged anywhere a future developer would see it before hitting
+   it in production. `SQLModel.metadata.create_all()` only creates
+   tables that are entirely absent; if an existing SQLModel class in
+   entities.py later gains a new column, create_all will NOT alter the
+   already-existing table to add it (confirmed via source: checkfirst
+   only compares table *names* via has_table(), never diffs columns).
+   main.py's lifespan docstring and db.py's module docstring both use
+   the word "idempotent" and "only creates missing tables" but neither
+   states the corollary in the direction a future dev needs to hear it:
+   adding a field to an existing model requires a manual migration step
+   (there is none in this project — confirmed no Alembic anywhere in
+   SPEC.md/BuildPlan.md, matching the specialist's own grep claim) or
+   the column will silently be missing in production until a query
+   referencing it 500s — i.e. a real risk of regressing into exactly
+   the class of bug this fix was written to close, just one column
+   later instead of one whole table. This should be a one-line comment
+   addition, not a design change, but right now it exists nowhere in
+   the codebase or either agent's log.
+
+Nothing else survived scrutiny:
+- Turso-specific fidelity (focus area 3): re-read the specialist's log
+  closely per the prompt's instruction — the production Turso DB was
+  NOT already fully schema'd before this fix ran; it held only Task
+  5A's unrelated `_litlist_5a_probe` scratch table. The app's 6 real
+  tables were created fresh, first by an acknowledged accidental hit
+  (the `env -u` pivot) and then confirmed intentionally via proof #2 —
+  so create_all's Turso/libsql-dialect behavior was genuinely exercised
+  creating tables from scratch, not run against a database that already
+  had partial state. This claim holds up.
+- Test isolation (focus area 4): read test_lifespan_schema.py directly.
+  Its `fresh_db_path` fixture correctly calls `db.reset_engine_cache()`
+  both before (after monkeypatching settings) and after the test, so
+  the lru_cache-backed engine singleton in app/db.py cannot leak into or
+  from other test files regardless of pytest's run order — verified
+  this mirrors conftest.py's own `db_engine` fixture's identical
+  reset-before/reset-after symmetry. The test correctly uses
+  `with TestClient(app) as client:` (required for lifespan to fire at
+  all, confirmed against Starlette's `_portal_factory` source as both
+  logs claim) rather than the bare `TestClient(app)` pattern every other
+  test file in this suite uses, and the PIVOT entry's own non-vacuousness
+  check (temporarily reverting main.py, confirming the test's own
+  assertion fails first, at `assert fresh_db_path.exists()`) is real and
+  reproducible reasoning, not asserted-only.
+- Cleanup discipline (focus area 5): the two session rows created by the
+  specialist's own curl calls against real production Turso were deleted
+  by exact primary key (each verified against its own Set-Cookie value
+  first, not a broad DELETE); the unrelated `_litlist_5a_probe` table was
+  correctly left alone as out-of-scope. The 6 real app tables now
+  permanently existing in production Turso is the correct, intended
+  outcome of this fix, not leftover cruft. No other artifact found.
+- Tester's verdict: read tester's full VERIFY entry — its coverage claim
+  (217/217 reproduced independently, non-vacuousness check reproduced
+  independently with the exact original error text, env-var pivot
+  reproduced independently, conftest.py diff confirmed comment-only) all
+  check out against what the diffs actually show. Tester's own explicit
+  disclosure that it did NOT re-run inspect() against prod itself and
+  did NOT write a new regression test (recommending one instead) is
+  honest framing, not an overclaim — the coordinator's subsequent PIVOT
+  requesting that exact test closes tester's own flagged gap.
+
+Both findings above are about an undocumented limitation/edge case in a
+fix that is otherwise real, correctly wired, and independently verified
+by both specialist and tester — no evidence either log's "done"/"passes"
+claim is wrong for what it actually tested. No blocking finding.

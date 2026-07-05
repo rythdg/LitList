@@ -4,6 +4,17 @@
 `app/db.py`'s local-dev fallback) with every SQLModel table created, so
 tests that need real rows (Task 1A's rotation/middleware tests, and later
 tasks) don't have to hand-roll engine setup per test file.
+
+Note: `app/main.py` now also creates tables via a FastAPI `lifespan` hook
+(live-e2e-test fix — a fresh boot of the real app against an empty DB used
+to 500 with "no such table"). That lifespan only runs when `TestClient` is
+used as a context manager (`with TestClient(app) as client: ...`), which
+this test suite's `client = TestClient(app)` module-level instances do
+NOT do (confirmed by reading `starlette.testclient`'s `_portal_factory`:
+without `__enter__`, each request gets its own throwaway portal and
+`wait_startup`/the lifespan never runs). So this fixture's own explicit
+`create_all` call below stays load-bearing and is NOT redundant — do not
+remove it.
 """
 
 from __future__ import annotations
