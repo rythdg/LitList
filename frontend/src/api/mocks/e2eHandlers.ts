@@ -32,6 +32,58 @@ interface State {
   zoteroCollections: ZoteroCollectionMock[];
 }
 
+/** SEC15.6 offline-emulation addition: unlike `zoteroConnected`/
+ *  `zoteroPushMode` above (both read once at module-init time, before
+ *  the app's first render), this flag is read **fresh on every request**
+ *  — `frontend/e2e/support/mswBrowser.ts`'s `setDecisionNetworkDown`
+ *  toggles it mid-test via `page.evaluate`, after the app has already
+ *  loaded and a session is already in progress, since the whole point
+ *  of the offline mid-session tests is flipping connectivity *during* a
+ *  live app, not only at boot.
+ *
+ *  Why a handler-level flag at all, rather than Playwright's own
+ *  `context.setOffline(true)`: MSW's browser worker (a real Service
+ *  Worker) answers `fetch` events entirely within the worker — it never
+ *  makes a real network round-trip for a request it mocks. Chromium's
+ *  `context.setOffline`/CDP network-offline emulation only blocks *real*
+ *  network sockets, so it has no effect on an MSW-mocked response; a
+ *  request the SW intercepts would keep "succeeding" even while the
+ *  browser context reports itself offline. This flag is what actually
+ *  makes the mocked `PATCH /decisions/{pmid}` fail the way a real
+ *  offline `fetch()` would (`HttpResponse.error()`, the exact same
+ *  network-error simulation `api/decisions.test.tsx`'s own unit test
+ *  uses) — `context.setOffline`/real `online`/`offline` window events
+ *  are still used by the specs for the parts they *do* affect (the PWA
+ *  shell precache test, and for driving `networkStore` via the app's
+ *  real `offlineSync.ts` listener). */
+function isDecisionNetworkDown(): boolean {
+  return readE2eWindowFlag("__LITLIST_E2E_DECISION_NETWORK_DOWN__", false);
+}
+
+/** Adversarial-review fix follow-up (Finding 1's Playwright coverage):
+ *  toggled live the same way as `isDecisionNetworkDown` — simulates the
+ *  "something genuinely changed server-side while this was queued"
+ *  case (session expired, the paper no longer exists, etc.) with a real
+ *  CONTRACTS.md §2 `not_found` `ApiError`, distinct from a network-level
+ *  failure. Used to prove `PendingRetryBanner`'s failed-item surface
+ *  (and `retryQueueStore`'s give-up-and-surface behavior) end-to-end,
+ *  not just at the unit level. */
+function isDecisionNotFound(): boolean {
+  return readE2eWindowFlag("__LITLIST_E2E_DECISION_NOT_FOUND__", false);
+}
+
+/** SEC15.6 addition (§13.6 vs. §4.5 distinctness test): when set (via
+ *  `useSearchServiceUnavailable`, before `page.goto`), `POST /search`
+ *  returns CONTRACTS.md §2's real `service_unavailable` shape instead of
+ *  a network error — this is PubMed itself being down while the user's
+ *  own connection is fine, the opposite condition from
+ *  `isDecisionNetworkDown` above. Read fresh per-request for the same
+ *  reason as that flag, though every spec that uses this sets it once
+ *  before navigation and never flips it mid-test. */
+function isSearchServiceDown(): boolean {
+  return readE2eWindowFlag("__LITLIST_E2E_SEARCH_SERVICE_DOWN__", false);
+}
+
 /** Task 4B addition: which `POST /zotero/push` outcome to simulate,
  *  seeded the same way via `useZoteroPushMode`. */
 type ZoteroPushMode = "success" | "partial-failure" | "connection-failure";
@@ -114,6 +166,17 @@ export const e2eHandlers = [
   ),
 
   http.post(base("/search"), async ({ request }) => {
+    if (isSearchServiceDown()) {
+      return HttpResponse.json(
+        {
+          error: {
+            code: "service_unavailable",
+            message: "PubMed is currently unavailable. Please try again shortly.",
+          },
+        },
+        { status: 503 },
+      );
+    }
     const body = (await request.json()) as { query: string };
     state.query = body.query;
     state.items = INITIAL_ITEMS.map((item) => ({ ...item }));
@@ -137,6 +200,20 @@ export const e2eHandlers = [
   ),
 
   http.patch(base("/decisions/:pmid"), async ({ params, request }) => {
+    if (isDecisionNetworkDown()) {
+      // Simulates a real offline `fetch()` rejection (§4.5) — see
+      // `isDecisionNetworkDown`'s docstring for why this can't just be
+      // Playwright's `context.setOffline`.
+      return HttpResponse.error();
+    }
+    if (isDecisionNotFound()) {
+      // Simulates a genuine server-side rejection (§13.6/CONTRACTS.md §2
+      // `not_found`) — see `isDecisionNotFound`'s docstring.
+      return HttpResponse.json(
+        { error: { code: "not_found", message: "Decision not found." } },
+        { status: 404 },
+      );
+    }
     const body = (await request.json()) as { decision: QueueItem["decision"] };
     const item = state.items.find((i) => i.pmid === params.pmid);
     if (item) item.decision = body.decision;

@@ -64,7 +64,7 @@ import {
   StackScreen,
   type DecisionSource,
 } from "./components/screens";
-import { CookieConsentNotice, ErrorState } from "./components";
+import { CookieConsentNotice, ErrorState, PendingRetryBanner } from "./components";
 import { confirmDisconnectDuringPush, ZoteroPushModal } from "./features/zotero";
 
 /** Only `ApiError` instances carry CONTRACTS.md §2's `{code, message}`
@@ -303,6 +303,7 @@ function App() {
   return (
     <>
       <CookieConsentNotice />
+      <PendingRetryBanner />
 
       {activePanel === "search" ? (
         <SearchSettingsPanel

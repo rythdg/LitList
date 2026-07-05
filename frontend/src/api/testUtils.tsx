@@ -3,12 +3,16 @@ import type { ReactNode } from "react";
 
 /** A fresh, retry-disabled QueryClient per test so failures resolve
  * immediately instead of TanStack Query's default backoff delaying
- * assertions. */
+ * assertions. `mutations.networkMode: "always"` matches the real
+ * `api/queryClient.ts` (see its own comment) — without it, a test that
+ * also flips `navigator`/`window` online state (none currently do, but
+ * a future one might) would silently pause mutations here too, unlike
+ * production. */
 export function createTestQueryClient() {
   return new QueryClient({
     defaultOptions: {
       queries: { retry: false },
-      mutations: { retry: false },
+      mutations: { retry: false, networkMode: "always" },
     },
   });
 }
