@@ -91,39 +91,69 @@ Do not delete or rewrite prior entries.
 
 ## RESUME POINT — read this first if picking this build back up
 
-**State as of 2026-07-05:** Tiers 0, 1, 2, 3, 4, and 5 (automated
-parts) are fully built, verified, committed to `main` and PUSHED to
-the real remote (github.com/rythdg/LitList), and working-tree-clean.
-Backend: 217/217 tests passing, ruff/mypy clean. Frontend: 34
-files/171 unit tests + 14/14 Playwright e2e passing, lint/typecheck/
-build clean.
+**State as of 2026-07-06:** Tiers 0-5 (automated parts) are fully
+built, verified, committed to `main` and PUSHED to the real remote
+(github.com/rythdg/LitList), working-tree-clean. Backend: 221/221
+tests passing, ruff/mypy clean. Frontend: 34 files/171 unit tests +
+14/14 Playwright e2e passing, lint/typecheck/build clean.
 
-**Tier 5's real find:** a genuine, previously-undiscovered bug in
-`backend/app/db.py`'s Turso connection path — `sqlalchemy-libsql`
-silently drops an `authToken` embedded in the URL query string, so the
-Turso path never actually worked despite passing its own (URL-string-
-only) tests since Tier 0. Fixed (auth_token via `connect_args`) and
-verified against a REAL live Turso database with a genuine
-cross-process round-trip.
+**The real, live deployed system now exists**: backend is live at
+https://litlist-backend.onrender.com (Render, real Turso DB), frontend
+is live at https://rythdg.github.io/LitList/ (GitHub Pages, deployed
+via the now-real CI/CD workflows). GitHub Pages deploy is green. The
+human still needs to (1) confirm all Render env vars are filled in
+(TURSO_*, ZOTERO_*, SESSION_COOKIE_SECRET, TOKEN_ENCRYPTION_KEY,
+FRONTEND_ORIGINS — see logs/creds.log and render.yaml), (2) update the
+Zotero app's registered callback URL to the real Render URL
+(https://litlist-backend.onrender.com/api/v1/zotero/auth/callback),
+and (3) optionally set up branch-protection status checks (needs one
+throwaway PR opened first so the check names exist to select).
 
-**Tier 5 manual remainder (human-only, blocks a fully-live deployment
-but NOT local testing):**
-1. Render dashboard → New → Blueprint → point at the repo → fill in
-   the 12 `sync: false` secrets `render.yaml` prompts for.
-2. GitHub repo Settings → Pages → Source → switch to "GitHub Actions".
-3. (Optional) Settings → Branches → require the two new CI status
-   checks on `main`.
+**A LIVE FUNCTIONAL TEST WAS RUN AND PASSED end-to-end** against local
+dev servers (real backend, real PubMed API, real frontend, real Zotero
+OAuth redirect) per the human's explicit request: searched "Neuroscience,
+astrocytes" — got real PubMed results, marked the first 2 Interested,
+next 2 Not Interested, confirmed the Saved List showed exactly the 2
+Interested papers, then triggered Push to Zotero, which correctly
+redirected to the REAL zotero.org login page (with a live Cloudflare
+CAPTCHA) — proving the full OAuth wiring is correct end-to-end. Session
+stopped there per instructions (completing login needs the human's
+real credentials, which nobody should hand to an agent). This wasn't a
+one-shot pass — it took 3 rounds of live-testing-driven bug discovery
+(see below), each fixed through the full tester/adversarial pipeline.
 
-**Tier 6, as literally scoped in BuildPlan.md (lines 687-712), needs
-the real deployed system plus manual real-device passes and a real
-Zotero sandbox account — none of which this orchestrator can execute
-autonomously.** Deferred as backlog until the human finishes the Tier 5
-manual remainder above. **Current focus instead:** a live functional
-test against local dev servers (real backend, real PubMed, real Zotero
-OAuth, real frontend) per the human's explicit request — search
-"Neuroscience, astrocytes," push first 2 results to Zotero, reject the
-next 2, then stop. This exercises the same real stack Tier 6 cares
-about, just not through the not-yet-live cloud deployment.
+**Real bugs found ONLY by live testing, never caught by the entire
+automated suite (222+ tests) or 15+ prior adversarial reviews:**
+1. Backend had NO startup hook to create its DB schema — every test
+   used a fixture that manually created tables, so `app.main:app`
+   itself had never been booted for real against an empty database
+   until this session. A fresh local DB, and the real production Turso
+   DB, both 500'd on every request. Fixed with a FastAPI `lifespan`
+   calling `SQLModel.metadata.create_all()`.
+2. Local SQLite had no concurrency handling — realistic parallel
+   frontend requests (a page load's simultaneous fetches) could raise
+   `database is locked`. Fixed with WAL mode + busy_timeout, strictly
+   gated to the local-only code path (Turso unaffected). Caught a
+   `.gitignore` gap along the way (WAL sidecar files weren't ignored).
+3. The GitHub Pages-deployed frontend had no way to know the backend
+   lives on Render (relative API path would resolve against
+   rythdg.github.io itself) — fixed via a VITE_API_BASE_URL build env.
+4. Render's Python runtime defaulted to 3.14, which has no prebuilt
+   wheel for this project's compiled Turso driver — pinned to 3.12.
+
+**Lesson reinforced, now written down explicitly for whoever resumes:
+an entirely green test suite and multiple adversarial review passes
+are necessary but NOT sufficient — nothing substitutes for actually
+booting the real app and clicking through it as a user would.** Budget
+time for this before considering any tier "done," even after full
+pipeline sign-off.
+
+**Tier 6**, as literally scoped in BuildPlan.md (lines 687-712), needs
+the real deployed system (now closer to ready — see above) plus manual
+real-device passes and a real Zotero sandbox login — the login step
+specifically needs the human physically present, not something this
+orchestrator can ever complete autonomously. Pick this up once the
+human has finished the Render env-var setup above.
 
 **Orchestrator process reminder for whoever resumes — READ THE INCIDENT
 NOTE FIRST:** every task this build goes through the same pipeline —
@@ -192,6 +222,18 @@ built work. Batch the commit message/log write, not the commit itself.
    rather than inventing its own copy, since this happened twice already
    (Task 4C found it once for §5.3a; a second instance may exist
    unflagged in a screen nobody's touched since Tier 2).
+9. Local SQLite's connection pool (SQLAlchemy default: 5 + 10
+   overflow) will raise `QueuePool timed out` under very high local
+   concurrency (dozens of simultaneous writers) — far beyond realistic
+   single-user local dev traffic, so not fixed, just documented in
+   backend/app/db.py's comments so it isn't confusing if ever hit.
+10. `backend/app/main.py`'s `create_all()`-on-boot has two known,
+    documented-in-code limitations: an unsynchronized check-then-create
+    race under concurrent first boot against a genuinely empty DB
+    (harmless today since production tables already exist), and it
+    never diffs/migrates columns on an existing table — a future field
+    added to an entities.py model needs a real migration, not just a
+    redeploy, or this exact bug class recurs one column later.
 
 **Credentials status** (full detail in logs/creds.log):
 - `ZOTERO_CLIENT_KEY`/`ZOTERO_CLIENT_SECRET` — RECEIVED, in
