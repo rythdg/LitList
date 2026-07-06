@@ -52,6 +52,7 @@ from __future__ import annotations
 from collections.abc import Generator
 from functools import lru_cache
 
+from sqlalchemy import event
 from sqlalchemy.engine import Engine
 from sqlmodel import Session, create_engine
 
@@ -92,10 +93,34 @@ def get_engine() -> Engine:
     """
     connection_url = _build_connection_url()
     connect_args: dict[str, object] = {}
-    if connection_url.startswith("sqlite:///"):
+    is_local_sqlite = connection_url.startswith("sqlite:///")
+    if is_local_sqlite:
         # Needed for SQLite when the engine is shared across threads, which
         # FastAPI's threadpool-backed sync routes do.
         connect_args["check_same_thread"] = False
+        # Local SQLite is single-writer; FastAPI's threadpool-backed sync
+        # routes mean genuinely concurrent requests (e.g. a page load's
+        # parallel /search/settings, /queue, /saved, /zotero/collections
+        # fetches, each touching the session row) can otherwise raise
+        # `sqlite3.OperationalError: database is locked` — reproduced live
+        # during manual end-to-end testing. A busy-timeout alone (waiting
+        # rather than failing immediately) wasn't sufficient under real
+        # concurrent load; SQLite's default rollback-journal mode holds an
+        # exclusive lock for the whole duration of any write. WAL mode
+        # (below) is the standard fix for this exact "many small
+        # concurrent reads/writes" pattern, since it lets readers proceed
+        # without blocking on a writer. Not a concern for Turso (a real
+        # client-server DB, not file-level locking), only the local-dev
+        # SQLite fallback. Note this raises the failure threshold to ~30s
+        # of *sustained serialized write time*, not an unlimited one — at
+        # very high concurrency (dozens of simultaneous writers, far
+        # beyond realistic local single-user traffic) SQLAlchemy's default
+        # connection pool (5 + 10 overflow = 15) will itself raise
+        # `QueuePool ... timed out` before the busy-timeout budget is
+        # exhausted; this is a separate, pre-existing pool-sizing limit,
+        # not something this fix changes or needs to address for local
+        # dev's actual usage pattern.
+        connect_args["timeout"] = 30
     elif settings.turso_database_url and settings.turso_auth_token:
         # Bypasses sqlalchemy-libsql's URL-query allowlist entirely — see
         # the module docstring's Task 5A bugfix note. `create_engine()`
@@ -104,7 +129,29 @@ def get_engine() -> Engine:
         # `libsql_experimental.connect()` even though the dialect itself
         # never looks for it in the URL.
         connect_args["auth_token"] = settings.turso_auth_token
-    return create_engine(connection_url, echo=False, connect_args=connect_args)
+    engine = create_engine(connection_url, echo=False, connect_args=connect_args)
+    if is_local_sqlite:
+        event.listen(engine, "connect", _enable_wal_mode)
+    return engine
+
+
+def _enable_wal_mode(dbapi_connection: object, _connection_record: object) -> None:
+    """Set on every new local-SQLite connection (see `get_engine()` above).
+
+    Both pragmas matter: WAL lets readers proceed without blocking on an
+    in-progress writer, but SQLite still allows only one writer at a time
+    even under WAL — two genuinely concurrent write transactions (e.g. two
+    requests both touching the session row's `last_seen_at`) still need
+    one to wait for the other. `busy_timeout` is set directly via pragma
+    here rather than relying solely on the `timeout` kwarg passed to
+    `sqlite3.connect()` in `get_engine()` above, since that Python-driver-
+    level setting was observed (live, during manual testing) to not fully
+    prevent `database is locked` under real concurrent load on its own.
+    """
+    cursor = dbapi_connection.cursor()  # type: ignore[attr-defined]
+    cursor.execute("PRAGMA journal_mode=WAL")
+    cursor.execute("PRAGMA busy_timeout=30000")
+    cursor.close()
 
 
 def get_session() -> Generator[Session, None, None]:
