@@ -2272,3 +2272,105 @@ Both findings above are about an undocumented limitation/edge case in a
 fix that is otherwise real, correctly wired, and independently verified
 by both specialist and tester — no evidence either log's "done"/"passes"
 claim is wrong for what it actually tested. No blocking finding.
+
+[2026-07-06T10:15:00] LIVE-TEST FIX: SQLite WAL/concurrency REVIEW — START
+Reviewing uncommitted backend/app/db.py diff (WAL mode + busy_timeout via
+event.listen) and tester's "LIVE-TEST FIX: SQLite WAL/concurrency VERIFY"
+log entry (2026-07-06T09:00-09:45) independently. Checking: (1) .gitignore
+vs WAL/SHM sidecar files, (2) QueuePool sizing at 120-thread failure mode,
+(3) flakiness of the new 20-thread/0.3s test, (4) auto-checkpoint disabled
+anywhere, (5) spot-check diff/tests match tester's description.
+
+[2026-07-06T10:50:00] LIVE-TEST FIX: SQLite WAL/concurrency REVIEW — COMPLETE
+
+Verified independently: read the actual diff (matches tester's
+description exactly — is_local_sqlite gates both connect_args["timeout"]
+and the event.listen call, Turso elif branch untouched); read all 3 new
+tests in backend/tests/test_db.py (match tester's description); ran
+test_concurrent_writes_do_not_raise_database_is_locked 5x locally, 5/5
+pass, ~6.3s each, no flakiness observed; confirmed no PRAGMA
+wal_autocheckpoint anywhere in app/ (SQLite's default 1000-page
+auto-checkpoint is left intact, so WAL won't grow unboundedly in a normal
+dev session); confirmed no pool_size/max_overflow set anywhere in db.py
+(SQLAlchemy default 5+10=15 stands).
+
+Findings:
+
+1. SIGNIFICANT — .gitignore does not cover WAL-mode sidecar files.
+   `.gitignore` has `backend/litlist_dev.db` (exact path) and `*.db`
+   (glob), plus `*.db-journal`. Neither pattern matches WAL mode's
+   sidecar files, which are named `<dbname>.db-wal` and `<dbname>.db-shm`
+   (the extension is appended, not replaced, so `*.db` — which requires
+   the name to *end* in `.db` — does not match `litlist_dev.db-wal`).
+   Verified directly: created a WAL-mode SQLite db named
+   `litlist_dev_test_wal_check.db` in backend/, and
+   `git check-ignore -v` matched only the `.db` file itself; the `-wal`
+   and `-shm` files produced zero match and would show as untracked in
+   `git status`. Before this fix, local dev used SQLite's default
+   rollback-journal mode, whose only sidecar (`*.db-journal`, already
+   gitignored) is transient and normally absent between requests; WAL's
+   sidecars are long-lived (present for the engine's whole lifetime) and
+   contain actual uncommitted-to-main-file row data (session rows, queue
+   state, cached PubMed results). Concrete failure scenario: a
+   contributor running the backend locally, then doing `git add -A`
+   (against CLAUDE.md's own advice, but a realistic slip) or a naive
+   `git add backend/`, would pick up `litlist_dev.db-wal`/`-shm` as new
+   untracked-turned-staged files and could commit live local session data
+   into the repo. Zotero tokens are application-level-encrypted per
+   §9.6 so this wouldn't leak raw Zotero credentials, but it would leak
+   session IDs, queue/search state, and repo bloat from binary DB
+   fragments. This is a direct, previously-absent side effect of the WAL
+   fix that nothing in the diff or tester's verification addressed — fix
+   is a one-line `.gitignore` addition (`*.db-wal`, `*.db-shm`, or a
+   broader `*.db-*` pattern), not raised by tester's log.
+
+2. MINOR — QueuePool default (5 + 10 overflow = 15) is unaddressed and
+   undocumented as a known limitation, and the new concurrency test
+   itself (20 threads via `db_engine.raw_connection()`) already exceeds
+   it. Tester's own log documents 7/17 failures at 120 threads being
+   `QueuePool ... timed out` rather than `database is locked` — a
+   genuinely separate failure mode correctly distinguished from the
+   SQLite-level lock. This is appropriately deprioritized in tester's
+   report as "not necessarily fix-now," which I agree with (150 doesn't
+   change: 15 real concurrent connections is far beyond realistic local
+   single-user dev/page-load traffic). Flagging only as unaddressed
+   documentation: db.py's inline comments now explain the WAL/busy_timeout
+   choice in detail but say nothing about the pool ceiling, so a future
+   reader hitting `QueuePool timed out` locally has no in-code pointer to
+   why. Not blocking since it's genuinely out of scope for a bug that was
+   about the SQLite-lock failure mode specifically, and tester's report is
+   honest about this being a distinct, secondary limit.
+
+3. Ran test_concurrent_writes_do_not_raise_database_is_locked 5x back to
+   back: 5/5 passed, consistent ~6.3s runtime (matches the 20×0.3s=6s
+   expected serialized hold time with negligible overhead). No flakiness
+   observed. Noted but not counted as a separate finding: the test uses
+   20 threads against a pool capped at 15 (pool_size=5+max_overflow=10),
+   so some threads must already wait on pool checkout before even
+   attempting `BEGIN IMMEDIATE` — this didn't manifest as flakiness in 5
+   local runs, but it means the test's stated "6s total serialized write
+   time" framing in tester's log is slightly incomplete (actual wall time
+   also includes pool-checkout queueing, not purely lock-wait time); this
+   is folded into finding 2 above rather than a separate item, since it's
+   the same root cause (default pool size) and didn't reproduce as an
+   actual failure.
+
+4. Spot-check of tester's other claims: confirmed accurate. Diff gating
+   (is_local_sqlite computed once, applied consistently, Turso path
+   untouched) matches tester's description exactly. The 3 new tests
+   (test_local_sqlite_wal_mode_enabled,
+   test_local_sqlite_connect_listener_applies_to_every_pooled_connection,
+   test_concurrent_writes_do_not_raise_database_is_locked) exist as
+   described and correctly use `BEGIN IMMEDIATE` + pre-commit sleep to
+   genuinely hold the write lock (not the vacuous lazy-transaction-begin
+   pattern tester flagged and corrected for). No auto-checkpoint pragma
+   is set anywhere, so WAL growth is bounded by SQLite's own default
+   (1000-page) auto-checkpoint — confirmed by grep, nothing overrides it.
+
+No blocking findings. The fix itself is sound, correctly gated to local
+SQLite only, and tester's verification work (including the honest ~30s
+sustained-load limit and the QueuePool discovery) holds up under
+independent re-derivation. The one significant gap tester's report did
+not surface is the .gitignore/WAL-sidecar-file interaction (finding 1),
+which is a genuine, concretely-reproduced side effect of introducing WAL
+mode that should be patched before merge.

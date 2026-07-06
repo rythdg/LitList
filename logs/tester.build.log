@@ -4536,3 +4536,132 @@ exactly, and conftest.py's diff is genuinely comment-only with 217/217
 still passing. This closes the production-blocking gap the fix targets,
 though the broader gap of "no automated fresh-boot regression test"
 remains open as a coverage recommendation, not a verification failure.
+
+[2026-07-06T09:00:00] LIVE-TEST FIX: SQLite WAL/concurrency VERIFY — START
+Verifying uncommitted backend/app/db.py diff (busy-timeout connect_args + WAL pragma via event.listen) against the live-test-reported "database is locked" bug under concurrent local-SQLite requests. Plan: (1) run full backend suite + ruff/mypy fresh, (2) confirm the diff is gated to is_local_sqlite only and Turso path untouched, (3) confirm event.listen(engine, "connect", ...) fires per-connection not per-engine, (4) write/attempt a genuine concurrency regression test and see if it still fails under tighter concurrency, (5) confirm whether a regression-of-the-fix test exists.
+
+[2026-07-06T09:45:00] LIVE-TEST FIX: SQLite WAL/concurrency VERIFY — COMPLETE
+Scope: uncommitted backend/app/db.py diff (connect_args["timeout"]=30 +
+_enable_wal_mode via event.listen(engine, "connect", ...)) for the live-
+e2e-reported `sqlite3.OperationalError: database is locked` bug on the
+local-SQLite dev fallback. No corresponding §15 subsection exists for
+this (it's an infra/local-dev-only concern, not a spec-level behavior),
+so I treated §15.1 (backend unit test tooling: pytest) as the applicable
+tooling baseline and added regression coverage under backend/tests/test_db.py.
+
+1. Full backend suite + lint, run fresh by me:
+   - `pytest -q` (backend/): 218/218 passed before my additions, then
+     221/221 passed after adding 3 new tests to test_db.py (no `-x`,
+     full run). No regressions.
+   - `ruff check .`: All checks passed.
+   - `mypy app`: Success: no issues found in 33 source files.
+
+2. Read the actual diff (`git diff backend/app/db.py`) directly, not
+   summarized. Confirmed: `is_local_sqlite = connection_url.startswith("sqlite:///")`
+   is computed once and both `connect_args["timeout"] = 30` and the
+   `event.listen(engine, "connect", _enable_wal_mode)` call are inside
+   `if is_local_sqlite:` blocks. The Turso branch (`elif settings.turso_database_url
+   and settings.turso_auth_token:`) is untouched — same single line as
+   before (`connect_args["auth_token"] = settings.turso_auth_token`), and
+   `event.listen` is only ever called when `is_local_sqlite` is true, so a
+   Turso engine never gets the WAL pragma or the sqlite3-specific `timeout`
+   kwarg. Confirmed correct gating — no risk to the production Turso path.
+
+3. Confirmed `event.listen(engine, "connect", ...)` semantics independently
+   (not just from SQLAlchemy docs): wrote a standalone script creating a
+   file-backed SQLite engine, opened two connections simultaneously (so the
+   pool couldn't just reuse one warmed connection), and the listener fired
+   once per distinct new DBAPI connection object (2 distinct ids recorded)
+   — confirming it fires per-connection, not per-engine/once-only, which is
+   exactly the semantics needed given `check_same_thread=False` lets the
+   pool hand out multiple connections to different threads. Also directly
+   verified via `PRAGMA journal_mode`/`PRAGMA busy_timeout` on the real
+   `get_engine()` singleton that both pragmas are actually applied
+   (`journal_mode: wal busy_timeout: 30000`), and that BOTH of two
+   concurrently-opened connections independently report `wal` (not just
+   the first one opened).
+
+4. Concurrency regression testing — this is the part where I have a
+   genuine, load-bearing finding, not just confirmation:
+   - A naive concurrency probe (many threads each doing `session.add()` +
+     `sleep()` + `commit()`) passed with ZERO errors both WITH and WITHOUT
+     the fix. Root cause: SQLAlchemy/sqlite3's lazy transaction-begin means
+     the actual write only happens at commit/flush time, so the sleep
+     before commit does NOT hold a write lock at all — this is a common
+     false-negative pattern for this kind of concurrency test, flagged
+     explicitly rather than silently accepted as "proof it works."
+   - Corrected by using raw `BEGIN IMMEDIATE` + explicit sleep BEFORE
+     commit (so the write lock is genuinely held during the sleep window,
+     simulating a slow in-flight request). With this corrected probe:
+     - 20 threads x 0.3s held lock (6s total serialized write time,
+       comfortably under sqlite3's default 5s built-in busy wait AND the
+       fix's 30s budget): WITHOUT the fix (git-stashed db.py), reliably
+       reproduced `OperationalError('database is locked')` 3/3 runs (one
+       run raised on threads 6, 13, and 18 respectively across the 3
+       repeats). WITH the fix, 0 errors across 3 repeats.
+     - This is now committed as a real regression test:
+       `test_concurrent_writes_do_not_raise_database_is_locked` in
+       backend/tests/test_db.py, plus two supporting pragma-inspection
+       tests (`test_local_sqlite_wal_mode_enabled`,
+       `test_local_sqlite_connect_listener_applies_to_every_pooled_connection`).
+       All 3 verified non-vacuous: I ran them against `git stash`-reverted
+       db.py and confirmed the two pragma tests fail with
+       `AssertionError: assert 'delete' == 'wal'` (SQLite's default
+       journal mode without the fix) and the concurrent-writes test fails
+       with the exact reported error string, then `git stash pop` restored
+       the fix and reran clean.
+   - HONEST LIMIT (this is the answer to the user's "if you can reproduce
+     a scenario where it STILL fails, report that honestly" ask): pushed
+     the same corrected probe further — 120 threads x 0.3s hold (36s of
+     total serialized write-lock time, deliberately exceeding the fix's
+     30s busy_timeout budget). Result: 17 errors, a mix of
+     `OperationalError('database is locked')` (8 occurrences, once the
+     30s busy_timeout itself is exhausted) AND
+     `TimeoutError('QueuePool limit of size 5 overflow 10 reached,
+     connection timed out, timeout 30.00')` (7 occurrences, SQLAlchemy's
+     default connection-pool exhaustion, a distinct and separate failure
+     mode from the SQLite-level lock, triggered because local SQLite is
+     fundamentally single-writer no matter what journal mode is used).
+     So: the fix genuinely raises the failure threshold from ~5s (Python
+     sqlite3's undocumented default busy timeout) to ~30s of sustained
+     serialized write contention, and eliminates the failure entirely at
+     realistic browser-page-load concurrency (a handful of near-simultaneous
+     short requests, matching the live-test's actual described scenario).
+     It does NOT eliminate the underlying single-writer bottleneck under
+     sustained heavy concurrent write load exceeding that budget — this
+     matches the user's own framing ("reduces, not necessarily eliminates")
+     exactly, and I can independently confirm that framing is accurate
+     rather than overstated.
+
+5. No pre-existing test caught a regression of this fix — test_db.py had
+   zero concurrency/pragma coverage before my additions. This gap is now
+   closed by the 3 tests added above (all in backend/tests/test_db.py):
+   removing the `event.listen(...)` call, or removing either PRAGMA, would
+   now be caught immediately by the two fast pragma-inspection tests
+   without needing to rely on timing-sensitive lock-contention reproduction
+   at all — that's a more useful regression guard than the
+   concurrency-timing test alone (which, while genuinely non-vacuous as
+   verified above, is inherently timing-sensitive and slower — it adds
+   ~6s to the suite; the two pragma tests are the low-flakiness first line
+   of defense).
+
+Files changed by me (test-only, no production code touched):
+  backend/tests/test_db.py — added 3 tests as described above.
+
+Verdict: FIX VERIFIED as a genuine, correctly-gated, idiomatic-SQLAlchemy
+improvement — Turso path is completely untouched, the connect-event
+listener correctly applies to every pooled connection (not just the
+first), and it demonstrably (not just plausibly) fixes the exact
+lock-contention failure mode reported, raising the failure threshold from
+~5s to ~30s of sustained serialized write time. CONFIDENCE: high that it
+resolves the bug as actually encountered (a page load's handful of
+near-simultaneous short requests) and fully closes that scenario; NOT
+fully eliminated in the general case — under sustained write contention
+exceeding ~30s of serialized hold time, or enough concurrent connections
+to exhaust SQLAlchemy's default pool (size 5 + overflow 10 = 15), both
+`database is locked` and a separate `QueuePool ... timed out` failure mode
+can still occur. This is a best-practice improvement that meaningfully
+reduces frequency/raises the threshold, not a categorical elimination of
+the underlying single-writer SQLite limitation — reporting this
+distinction explicitly per the user's request rather than overstating the
+fix. Regression coverage gap (item 5) is now closed by the 3 new tests.
