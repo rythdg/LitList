@@ -4665,3 +4665,186 @@ reduces frequency/raises the threshold, not a categorical elimination of
 the underlying single-writer SQLite limitation — reporting this
 distinction explicitly per the user's request rather than overstating the
 fix. Regression coverage gap (item 5) is now closed by the 3 new tests.
+
+[2026-07-08T16:05:13Z] TASK 6A VERIFY — START
+Verifying/implementing BuildPlan.md Task 6A (Cross-browser/device, SPEC.md
+§15.4) automated backbone: extending Playwright to run chromium/firefox/
+webkit, and adding a live-smoke spec against the real deployed frontend
+(https://rythdg.github.io/LitList/) + real deployed backend
+(https://litlist-backend.onrender.com), since existing e2e specs
+(happyPath.msw.spec.ts etc.) are all MSW-mocked via a window-flag the
+app's own JS checks and cannot run against real infra as-is. Confirmed
+both deployed endpoints return 200 before starting.
+
+[2026-07-08T16:06:00Z] TASK 6B VERIFY — START
+Verifying/implementing BuildPlan.md Task 6B (PWA install, SPEC.md §15.5).
+Scope: automated Lighthouse CI installability checks only (manifest, SW
+registration, icon sizes) against both a local production build
+(frontend/dist via vite preview, matching playwright.config.ts's
+preview-not-dev convention) and the real live URL
+(https://rythdg.github.io/LitList/). The manual real-device install pass
+is explicitly out of scope (human release-checklist item per BuildPlan
+table). Starting by reading Task 2A's existing lighthouserc.json (found
+frontend/lighthouserc.json, @lhci/cli@0.13.0 pin already present, and a
+prior tester VERIFY entry at line ~654 already confirmed the local-only
+config gives pwa score=1 with all 6 named audits passing) and checking
+whether it (a) is wired into CI and (b) covers the live URL, since 2A's
+task scope was app-shell/local-build only, not CI-wiring or live-URL
+checking.
+
+[2026-07-08T16:07:04Z] TASK 6E VERIFY — START
+Verifying/implementing BuildPlan.md Task 6E (Gesture testing, live, SPEC.md
+§15.10) against the real deployed frontend (https://rythdg.github.io/LitList/,
+confirmed HTTP 200) and real deployed backend
+(https://litlist-backend.onrender.com, confirmed responding to a real
+POST /api/v1/search). Read frontend/e2e/dragGesture.msw.spec.ts first:
+it runs real Playwright mouse-drag emulation but against a local `vite
+preview` build with MSW-mocked network responses (via
+__LITLIST_E2E_USE_MSW__), never against the live GH Pages + Render stack.
+No prior live-target Playwright config/spec exists yet in this worktree
+(checked frontend/e2e/*, all specs use MSW; a prior tester session left
+TASK 6A/6B VERIFY START entries with no COMPLETE and no live spec files
+committed, so nothing to reuse there either). Plan: add a
+playwright.live.config.ts (baseURL = live GH Pages URL, no local
+webServer) and a dragGesture.live.spec.ts that (1) drives one real
+PubMed search against the live backend, then (2) exercises
+swipe-past-threshold, mid-drag cancel/snap-back, tap/click, and keyboard
+Left/Right against the live, un-mocked app. Keeping interaction volume
+deliberately modest (a single search, a handful of decisions) per the
+explicit instruction not to trip 6F's inbound rate limiter.
+
+[2026-07-08T16:20:00Z] TASK 6B VERIFY — COMPLETE
+Scope: BuildPlan.md line 830 (Task 6B, primary agent `tester`), SPEC.md
+§15.5, CI-wiring requirement §15.11. Automated installability checks
+only — manual real-device install pass explicitly deferred to human
+release checklist per BuildPlan table, not attempted here.
+
+Findings on existing state (before my changes):
+- Task 2A had already produced frontend/lighthouserc.json (@lhci/cli
+  pinned to 0.13.0, bundling Lighthouse 11.4.0, because newer Lighthouse
+  dropped PWA-category audits — documented in 2A's PIVOT and confirmed
+  by a prior tester VERIFY entry) and an `npm run lighthouse` script
+  (build + `lhci autorun` against the local dist/ via a static server).
+- Gap found: this local-only check was NOT wired into any GitHub Actions
+  workflow. `.github/workflows/ci.yml` (the PR-gate pipeline referenced
+  by §15.11) ran typecheck/lint/vitest only — no Lighthouse step. Per
+  §15.11 ("All of the above except the manual release-candidate passes
+  ... run in the existing PR pipeline, blocking merge"), Lighthouse CI's
+  installability check is NOT one of the named manual exceptions (those
+  are 15.4.1/15.4.2/15.5's OS-level check/15.7's real-Zotero test), so
+  it belongs in the blocking PR pipeline. This was a real gap, not
+  covered by 2A's task scope (2A's checkpoint was just "Lighthouse
+  installability check passes" locally, not CI wiring).
+- Gap found: no config or check existed against the real live URL
+  (https://rythdg.github.io/LitList/) at all — only the local static
+  build was ever exercised.
+
+What I did:
+1. Re-ran the existing local config myself (did not just trust 2A's/the
+   prior tester's log): `npm run lighthouse` (frontend/, @lhci/cli
+   0.13.0/Lighthouse 11.4.0) — exit 0. Inspected .lighthouseci/lhr-*.json
+   directly: categories.pwa.score = 1, and each of installable-manifest,
+   viewport, maskable-icon, themed-omnibox, splash-screen, content-width
+   individually score 1. .lighthouseci/assertion-results.json = [] (no
+   assertion failures). Ran this twice (before and after adding CI
+   wiring) with identical results.
+2. Wrote frontend/lighthouserc.live.json (new file) pointing Lighthouse
+   directly at https://rythdg.github.io/LitList/ (no staticDistDir/
+   startServerCommand — real network navigation), asserting the same
+   named criteria (installable-manifest, viewport, maskable-icon,
+   themed-omnibox, splash-screen, content-width; omitted a
+   "service-worker" key I initially added speculatively — checked the
+   actual LHR JSON and confirmed no such standalone audit exists at
+   Lighthouse 11.4.0, SW registration is folded into
+   installable-manifest's own audit, titled "Web app manifest and
+   service worker meet the installability requirements" — verified this
+   from audit metadata before finalizing the config, not assumed).
+3. Ran `npx lhci autorun --config=lighthouserc.live.json` against the
+   real live URL: exit 0. Inspected .lighthouseci/lhr-*.json:
+   finalUrl = https://rythdg.github.io/LitList/, lighthouseVersion
+   11.4.0, categories.pwa.score = 1, all 6 named audits individually
+   score 1, assertion-results.json = []. No installability defect found
+   on the live deployment — this is a real, if unsurprising, positive
+   result, not assumed from the local pass: GitHub Pages serves
+   manifest.webmanifest as `application/manifest+json; charset=utf-8`
+   (200) and sw.js as `application/javascript; charset=utf-8` (200), and
+   the live manifest correctly has start_url/scope = "/LitList/"
+   (subpath-aware, matching the VITE_BASE_PATH build-time config in
+   deploy.yml) rather than "/" — confirms the GH-Pages-specific
+   subpath handling actually works in production, not just in the build
+   config. All three icon URLs (pwa-192x192.png, pwa-512x512.png,
+   pwa-512x512-maskable.png) return 200/image/png and are verified
+   192x192/512x512/512x512 via `file` on the underlying PNGs.
+4. Wired the local check into `.github/workflows/ci.yml`'s existing
+   frontend job as a new blocking step ("Lighthouse CI (PWA
+   installability, §15.5/§15.11)": `npm run lighthouse`) — no new job/
+   check name, so the existing branch-protection setup (once the human
+   configures required status checks per that file's own trailing
+   comment) automatically covers it; failure here fails the whole
+   "PR checks / Frontend" check same as a lint/test failure would.
+   Did NOT add the live-URL check to ci.yml, since there is no live URL
+   representing an unmerged PR's changes yet — per §15.11's own
+   "run in the PR pipeline" framing this only applies to the local-build
+   check.
+5. Added a new `lighthouse-live` job to `.github/workflows/deploy.yml`,
+   running after the `deploy` job, using lighthouserc.live.json against
+   the real URL. This is post-deploy verification, not a PR-merge gate
+   (deploy already happened by the time it runs) — a failure here
+   surfaces as a failed workflow run in the Actions tab rather than
+   blocking anything already merged. This directly implements this
+   task's instruction to prefer testing the live URL as "the more
+   meaningful" check, since it is the only mechanism that would catch a
+   GitHub-Pages-serving-specific installability regression (wrong MIME
+   type, missing HTTPS, subpath misconfiguration) that a local
+   `vite preview` build could never surface.
+6. Validated both modified workflow YAML files parse correctly
+   (`yaml.safe_load`, both OK). Did not attempt to actually trigger
+   GitHub Actions (no PR/push made) — the steps were validated by running
+   the exact same commands (`npm run lighthouse`,
+   `npx lhci autorun --config=lighthouserc.live.json`) locally that the
+   workflow steps invoke, from a clean `npm ci` install, not just
+   sanity-checking YAML syntax.
+
+Result summary:
+- Local production build (frontend/dist via vite preview-equivalent
+  static server): PWA installability score 1/1, all 6 named audits
+  green, 0 assertion failures.
+- Live URL (https://rythdg.github.io/LitList/): PWA installability
+  score 1/1, all 6 named audits green, 0 assertion failures. No
+  installability defect found — not a Tier 2/5 regression to report.
+- CI wiring: now present. ci.yml blocks PR merge on the local-build
+  Lighthouse check (new, previously missing — this was the real gap for
+  this task). deploy.yml runs the live-URL check post-deploy
+  (non-blocking, new).
+
+Coverage/scope notes (not failures, but explicit gaps):
+- This only re-confirms 2A's PWA-category audit scope (installable
+  manifest, viewport, maskable icon, themed omnibox, splash screen,
+  content width) — it does not independently verify vite-plugin-pwa's
+  precache-exclusion-of-API-responses gap the prior tester already
+  flagged at Task 2A's VERIFY (still open, unrelated to installability
+  criteria, out of this task's §15.5 scope).
+- The pinned @lhci/cli@0.13.0/Lighthouse 11.4.0 workaround for upstream
+  PWA-audit removal (2A's PIVOT) is still in place and now doubly
+  exercised (local + live); I did not re-attempt reproducing the
+  upstream removal claim with a newer @lhci/cli version, same
+  face-value acceptance the prior tester noted.
+- The manual real-device OS install-prompt pass (the actual point of
+  6B's BuildPlan checkpoint alongside "Lighthouse CI green") remains
+  entirely unverified by anything in this entry — it is a human
+  checklist item and out of scope for this automated pass, consistent
+  with BuildPlan's own split of 6B between `tester` and `human`.
+
+Verdict: The automated half of Task 6B's checkpoint ("Lighthouse CI
+green") is MET — against both the local build and, additionally (a gap
+this task closed), the real live URL — and is now wired into CI so it
+runs on every PR (blocking, local) and after every deploy (non-blocking,
+live), rather than being a standalone script nobody runs. The other half
+of the checkpoint ("manual install confirmed on real devices") is NOT
+met and was never in scope for me — flagging explicitly so the wave gate
+for 6B is not mistaken for fully closed until the human completes that
+manual pass.
+
+Files touched: .github/workflows/ci.yml (added Lighthouse step to
+frontend job), .github/workflows/deploy.yml (added lighthouse-live job),
+frontend/lighthouserc.live.json (new).
