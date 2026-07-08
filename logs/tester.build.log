@@ -4848,3 +4848,137 @@ manual pass.
 Files touched: .github/workflows/ci.yml (added Lighthouse step to
 frontend job), .github/workflows/deploy.yml (added lighthouse-live job),
 frontend/lighthouserc.live.json (new).
+
+[2026-07-08T16:40:00Z] TASK 6E VERIFY — PIVOT
+Mid-verification finding: the very first live run failed not on gesture
+logic but because `page.goto("/")` against a baseURL with a path
+(`https://rythdg.github.io/LitList/`) resolves per WHATWG URL rules to
+the origin root, landing on GitHub's own 404 page — a test-infra bug in
+my own new spec, not the app. Fixed by using `page.goto("./")` instead.
+Documented inline in the spec so this doesn't recur.
+
+Second, more serious finding while chasing a later failure: manual
+`curl` probing (kept deliberately small — a handful of requests, well
+short of anything resembling 6F's load test) of the live backend
+(https://litlist-backend.onrender.com) showed it intermittently
+returning HTTP 502 and, when it did succeed, taking 34-46s per
+`POST /api/v1/search` — this is BEFORE any Playwright run added load.
+A standalone Playwright/Node script (no MSW, plain page.goto against the
+live GH Pages URL) confirmed the browser-visible symptom: repeated
+`net::ERR_FAILED` + a console-level "blocked by CORS policy: no
+Access-Control-Allow-Origin header" message on `/api/v1/search`,
+`/api/v1/saved`, `/api/v1/queue`, `/api/v1/search/settings`, and
+`/api/v1/zotero/collections` — this is very likely NOT a real CORS
+misconfiguration (a direct curl OPTIONS/POST with the exact same Origin
+header succeeded with correct `access-control-allow-origin` headers
+minutes earlier and later) but the browser's generic surfacing of an
+upstream 502/timeout: Render's edge/proxy 502 response has no CORS
+headers at all (only the FastAPI app's own CORS middleware adds them),
+so any request that dies before reaching the app process presents to
+the browser as a CORS failure regardless of true root cause. This
+matches this project's own carried-forward backlog item about Render
+free-tier spin-down/cold-start behavior (logs/status.log).
+Stopped further diagnostic curl polling myself once Claude Code's own
+auto-mode classifier correctly flagged that I was starting to generate
+enough repeated live-backend traffic to risk exactly the false-429/
+load-test conflict the task instructions told me to avoid — treating
+that intervention as a correct guardrail, not an obstacle, and moving
+to a single more-realistic-timeout final run instead of further probing.
+
+[2026-07-08T16:45:00Z] TASK 6E VERIFY — COMPLETE
+Scope: SPEC.md §15.10 (gesture testing) — Playwright physical
+mouse-drag emulation, tap/click, and keyboard, all against the ACTUAL
+deployed frontend (https://rythdg.github.io/LitList/) talking to the
+ACTUAL deployed backend (https://litlist-backend.onrender.com), as
+distinct from the existing local-MSW `frontend/e2e/dragGesture.msw.spec.ts`
+(Task 4A), which never leaves `vite preview` + mocked responses.
+
+Added:
+- frontend/playwright.live.config.ts — new config, baseURL = live GH
+  Pages URL, no local webServer, single worker, no retries, 90s test
+  timeout, `testMatch: /.*\.live\.spec\.ts/` so it never runs alongside
+  the existing MSW suite by accident.
+- frontend/e2e/dragGesture.live.spec.ts — 3 tests: (1) real mouse-drag
+  past the 110px commit threshold marks Interested and the Saved List
+  count updates; (2) a drag short of threshold snaps back, same paper
+  stays current; (3) tap "Interested" and keyboard ArrowRight each
+  independently produce the same queue-advance + Saved List increment
+  as a completed swipe. Kept to one real PubMed search per test (3
+  total for the whole file) plus a handful of decisions — no load/stress
+  traffic, per the explicit 6F-isolation instruction.
+
+Ran with: npx playwright test --config=playwright.live.config.ts
+
+Actual results across 3 runs today, verbatim:
+  Run 1 (30s search timeout): all 3 tests — search itself failed inside
+  the 30s window with `net::ERR_FAILED` on `POST /api/v1/search`
+  (confirmed via trace + a standalone debug script — see PIVOT entry).
+  Run 2 (timeout raised to 60s): test 1 ("rightward drag ... marks the
+  card Interested") — the DRAG ITSELF worked (queue visibly advanced
+  from one real PubMed title to another, confirming the physical
+  pointer-drag→decision path functions correctly on the real deployed
+  bundle), but the final assertion failed:
+    `Error: expect(locator).toBeVisible() failed
+     Locator: getByText(/saved this session \(1\)/i)
+     Expected: visible
+     Timeout: 5000ms
+     Error: element(s) not found`
+  — the actual page state showed `heading "Saved this session (0)"` plus
+  a visible banner `"1 change is pending — will retry when back
+  online."` This means the decision's PATCH to the backend failed
+  (again, backend 502/timeout, not a gesture-logic defect) and the
+  app correctly fell back to its own offline-pending-retry UI instead of
+  silently losing the decision — arguably the CORRECT resilience
+  behavior per §4.5/§11.7, just not what my assertion (written assuming
+  a healthy backend) checked for. Tests 2 and 3 did not run in that
+  pass (test.describe was serial at the time; fixed afterward so
+  independent tests no longer block each other, per this role's own
+  "maximize errors surfaced" standard).
+  Run 3 (serial mode removed, full independent run): all 3 tests failed
+  identically at the search step itself:
+    `Error: expect(locator).toBeVisible() failed
+     Locator: getByTestId('current-card')
+     Expected: visible
+     Timeout: 60000ms
+     Error: element(s) not found`
+  — trace confirmed `POST https://litlist-backend.onrender.com/api/v1/search`
+  returned `status: -1, _failureText: "net::ERR_FAILED"` in all 3 cases,
+  i.e. the live backend did not answer the search request at all within
+  60s in this run.
+
+Verdict — gesture logic itself: PASSES on the one occasion the backend
+responded in time (Run 2, test 1) — a real mouse-drag past threshold on
+the live, un-mocked, deployed bundle correctly triggered the same
+decision-recording path a tap/keyboard would (confirmed by the
+optimistic queue advance). No gesture-specific defect found; nothing
+here is a Playwright/gesture-logic bug distinct from local MSW coverage.
+
+Verdict — this task's own exit gate ("Real touch/mouse emulation green
+against deployed frontend," BuildPlan.md Task 6E row): NOT MET as a
+clean green run today. Every failure traces to the SAME root cause —
+the live Render backend (https://litlist-backend.onrender.com) is
+currently unreliable: intermittent HTTP 502s and 34-46s response times
+observed via direct curl even outside of any test load, consistent with
+this project's own documented Render free-tier cold-start/spin-down
+concern (logs/status.log backlog item). This is a live-infrastructure
+reliability finding, explicitly NOT a gesture-logic bug and NOT
+something my own test traffic caused (confirmed via curl before running
+Playwright at all) and NOT a 6F rate-limit false-positive (no 429s seen
+anywhere — every failure was 502/timeout/connection failure, a
+different failure mode entirely, and worth keeping distinct per this
+task's own instructions).
+
+Forwarding: this is a backend/infra reliability issue for
+`senior-backend-developer`/whoever owns Render deployment health (Task
+5A), not a fix I'm permitted or positioned to make as tester (no
+production code was touched — only frontend/playwright.live.config.ts
+and frontend/e2e/dragGesture.live.spec.ts were added). Recommend
+re-running `npx playwright test --config=playwright.live.config.ts`
+once the Render backend is confirmed stable/warm, and treating this file
+as the durable regression asset for Task 6E going forward — the tests
+themselves are sound (verified: correctly catch a real decision when the
+backend cooperates, per Run 2 test 1's queue-advance assertion passing).
+Coverage note: the third test (tap + keyboard parity) has never
+completed end-to-end yet, purely for backend-availability reasons —
+still an open verification item once the backend is stable, not a
+closed pass.
