@@ -269,3 +269,81 @@ keep/discard breakdown — short version: keep `LLPaperCard`'s
 drag-to-decide gesture math as the reference for the swipe gesture,
 discard its playback engine and state management entirely since
 stricter tested equivalents already exist).
+
+## 2026-07-08 — Tier 6A/6B/6E (automated tracks)
+
+- Dispatched 6A, 6B, 6E in parallel per BuildPlan.md's Tier 6 scoping
+  (6F deliberately excluded — its rate-limit load test would interfere
+  with 6A/6E's live traffic). Before dispatch, independently re-verified
+  the live deployment was actually healthy (not just trusting the prior
+  session's claim): backend `/health` 200, a real `POST /search` against
+  production returned real PubMed results, frontend 200 on GitHub Pages.
+- **6B (PWA install): DONE, merged (`6084fdf`).** Wired Task 2A's
+  existing local-only Lighthouse config into the blocking CI pipeline
+  (a real gap — SPEC §15.11 requires it there, it was never wired) and
+  added a post-deploy check against the real live URL. Both green: PWA
+  score 1/1, all 6 named installability audits passing, no defect found
+  on the live deployment. Manual real-device install pass remains a
+  human-only checklist item, unstarted.
+- **6A (cross-browser) and 6E (live gesture): exit gates NOT MET**, but
+  real, valuable findings came out of both and are merged as regression
+  assets (`214d6e5`, `c6765cb`):
+  1. **Two genuine WebKit-only bugs**, chromium/firefox both pass the
+     identical assertions: (a) `e2e/offlineSession.msw.spec.ts:46` — a
+     failed intercepted request under WebKit's own service worker raises
+     a real in-page error event Chromium/Firefox don't raise the same
+     way; (b) `e2e/offlineShell.spec.ts:21` — `page.reload()` while
+     offline throws a WebKit-internal error before the precache can even
+     be exercised. Neither fixed yet — flagged forward for
+     `senior-frontend-developer` triage, since tester's job is to find,
+     not fix.
+  2. **A live production reliability issue, independently confirmed
+     three separate times** (once by the orchestrating session's own
+     `curl` probing before dispatch even completed, once by 6E, once by
+     6A): `POST /api/v1/search` against the real Render backend
+     intermittently returns HTTP 502 in under 1.5s, and when it does
+     succeed can take 30-46s — this while `/health` stays consistently
+     fast and green throughout. Ruled out as an application bug by
+     reading the actual code: PubMed/iCite calls are correctly
+     `httpx.AsyncClient`-based, the outbound rate limiter uses
+     `asyncio.sleep` not a blocking call. This points to a genuine Render
+     free-tier infra/capacity issue (leading hypothesis: single Uvicorn
+     worker with no `--workers` flag in `render.yaml`, possibly combined
+     with `NCBI_API_KEY` not actually being set in production dropping
+     outbound pacing to 3 req/s) — needs the human to check Render's
+     dashboard (restart/memory logs, confirm `NCBI_API_KEY` is set),
+     since no agent has dashboard access. One genuine silver lining: when
+     a decision failed to save because of this, the app correctly fell
+     back to its "pending — will retry" offline UI instead of losing the
+     swipe — that resilience path works as designed.
+  3. New live-smoke test assets landed either way (they're the right
+     regression coverage once the backend is stable, and already proved
+     themselves against the live backend on the runs where it briefly
+     cooperated): `frontend/playwright.live.config.ts`,
+     `frontend/e2e-live/liveSmoke.spec.ts`,
+     `frontend/e2e/dragGesture.live.spec.ts`.
+- Process note for whoever resumes: all three Tier 6 tester agents wrote
+  their `TASK 6X VERIFY` log entries by writing directly into this
+  session's main-repo `logs/tester.build.log` from inside their own
+  worktrees, rather than via their own worktree's git history — a
+  deviation from the usual "commit inside your own worktree" model. The
+  entries themselves were real and load-bearing (verified against actual
+  results before trusting them, and one case — 6B's first pass — that
+  claimed a log entry existed when it didn't, was caught and corrected
+  by resuming that agent). Worth tightening the instructions on this if
+  Tier 6 is ever re-run.
+
+**NEXT STEPS, in order:**
+1. Human: check Render's dashboard for `litlist-backend` — restart/
+   memory logs around 2026-07-08 16:00-17:15 UTC, and confirm whether
+   `NCBI_API_KEY` is actually set in production. This blocks further
+   productive live testing (6C/6D/6F all need a backend that responds
+   reliably) and is degrading real users' search experience right now.
+2. Once backend reliability is understood/fixed: dispatch
+   `senior-frontend-developer` to fix the two WebKit-only bugs above,
+   tester+adversarial re-verify, then re-run 6A/6E's live-smoke assets
+   to actually close their exit gates.
+3. 6C (real Zotero OAuth smoke test) and 6F (rate-limit load test)
+   still need to run — 6C needs the human's real Zotero sandbox login,
+   6F should wait until the backend reliability issue is resolved so its
+   results aren't confounded with the existing instability.
