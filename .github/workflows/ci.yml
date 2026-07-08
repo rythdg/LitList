@@ -78,6 +78,18 @@ jobs:
       - name: Test (vitest)
         run: npm run test
 
+      - name: Lighthouse CI (PWA installability, §15.5/§15.11)
+        # Builds and asserts against the local production build (dist/),
+        # matching playwright.config.ts's real-build-not-dev-server
+        # convention. Checks the concrete installability criteria named
+        # in SPEC §15.5: valid manifest, registered service worker
+        # (folded into the installable-manifest audit at the pinned
+        # Lighthouse 11.4.0), and correctly sized icons (maskable-icon).
+        # This does NOT check the real OS install prompt/UX — that is a
+        # human release-checklist item (BuildPlan Task 6B), deliberately
+        # not gated here per §15.11's carve-out for manual passes.
+        run: npm run lighthouse
+
 # ---------------------------------------------------------------------
 # HUMAN SETUP REQUIRED (cannot be done from a workflow file):
 # To make this workflow actually *block* merges (not just report status),

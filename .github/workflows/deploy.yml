@@ -79,6 +79,37 @@ jobs:
         id: deployment
         uses: actions/deploy-pages@v4
 
+  lighthouse-live:
+    # Post-deploy-only installability check against the real, already-live
+    # GitHub Pages URL (SPEC §15.5) — this is deliberately NOT part of the
+    # PR-blocking ci.yml pipeline (there is no live URL for an unmerged
+    # PR's changes); it exists to catch anything GitHub Pages' actual
+    # serving behavior (headers, MIME types, HTTPS, subpath base)
+    # introduces that a local `vite preview` build check in ci.yml
+    # wouldn't. A failure here does not block the merge that already
+    # happened, but does fail this workflow run so it's visible in the
+    # Actions tab rather than silently drifting.
+    name: Lighthouse CI (live installability check)
+    needs: deploy
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: "20"
+          cache: "npm"
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Lighthouse CI against https://rythdg.github.io/LitList/
+        run: npx lhci autorun --config=lighthouserc.live.json
+
 # ---------------------------------------------------------------------
 # HUMAN SETUP REQUIRED (one-time, cannot be done from a workflow file):
 # Settings -> Pages -> "Build and deployment" -> Source -> select
