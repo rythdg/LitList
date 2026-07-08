@@ -1,13 +1,22 @@
 import { defineConfig, devices } from "@playwright/test";
 
 /**
- * Playwright config (BuildPlan.md Task 4A, SPEC.md §15.10).
+ * Playwright config (BuildPlan.md Task 4A, SPEC.md §15.10; three-engine
+ * matrix added by Task 6A, SPEC.md §15.4).
  *
  * Runs against `vite preview` (a real production-ish build served
  * statically) rather than `vite dev`, so these tests exercise the same
  * bundle the app actually ships, including the PWA service worker
  * registration path — consistent with §15.5's Lighthouse pass also
  * running against `dist/`. Playwright starts/stops this server itself.
+ *
+ * §15.4's "automated backbone" is Playwright's three bundled engines —
+ * Chromium, Firefox, WebKit — run against this same locally-built/MSW-
+ * mocked suite (the existing regression suite, unchanged in substance).
+ * The separate `playwright.live.config.ts` (also 3 engines) additionally
+ * exercises a small live-smoke subset against the real deployed
+ * frontend/backend, which this file's MSW-mocked specs and the
+ * `vite preview` `webServer` cannot do as written.
  */
 export default defineConfig({
   testDir: "./e2e",
@@ -23,6 +32,14 @@ export default defineConfig({
     {
       name: "chromium",
       use: { ...devices["Desktop Chrome"] },
+    },
+    {
+      name: "firefox",
+      use: { ...devices["Desktop Firefox"] },
+    },
+    {
+      name: "webkit",
+      use: { ...devices["Desktop Safari"] },
     },
   ],
   webServer: {

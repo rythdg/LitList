@@ -1,30 +1,40 @@
 import { defineConfig, devices } from "@playwright/test";
 
 /**
- * Live-target Playwright config (BuildPlan.md Task 6E, SPEC.md §15.10).
+ * Live-infra Playwright config (BuildPlan.md Task 6A, SPEC.md §15.4).
  *
- * Unlike `playwright.config.ts` (Task 4A), this config does NOT start a
- * local `vite preview` server and does NOT point at localhost — it runs
- * against the actual deployed GitHub Pages frontend, which in turn talks
- * to the actual deployed Render backend (baked in at build time via
- * `VITE_API_BASE_URL`). No MSW is used by specs run under this config;
- * `frontend/e2e/*.live.spec.ts` files exercise the real, un-mocked
- * network path end to end.
- *
- * Deliberately single-worker, no retries, low volume: Task 6E must not
- * generate enough traffic to trip Task 6F's inbound rate-limiter tests
- * (which are explicitly sequenced not to run concurrently with 6A/6E
- * against the same live deployment).
+ * Separate from `playwright.config.ts` on purpose: that file's specs are
+ * all MSW-mocked (`useMswInBrowser` flips a `window` flag the *locally
+ * built* app checks before deciding whether to hit a mock worker or a
+ * real backend) or depend on a `vite preview` server Playwright starts
+ * itself — neither applies to the real deployed frontend, which is a
+ * static GitHub Pages build with no local server and no MSW flag wired
+ * for a stranger's browser session. Rather than retrofit every existing
+ * MSW spec to somehow also run "live" (they can't — there is no local
+ * backend to point at, and the real backend's data/session state isn't
+ * MSW's fixed fixture corpus), this config runs a small, separate
+ * `e2e-live/` smoke suite directly against:
+ *   - frontend: https://rythdg.github.io/LitList/ (real GitHub Pages)
+ *   - backend:  https://litlist-backend.onrender.com (real Render/Turso)
+ * across the same three engines §15.4 asks for. No `webServer` block —
+ * there is nothing local to start; this hits the internet.
  */
 export default defineConfig({
-  testDir: "./e2e",
-  testMatch: /.*\.live\.spec\.ts/,
+  testDir: "./e2e-live",
   fullyParallel: false,
+  // Live smoke tests share real backend session/DB state and hit a real
+  // rate-limited external API (PubMed) — sequential run avoids the kind
+  // of cross-test interference BuildPlan.md's Tier 6 note (6F vs.
+  // 6A/6E) already flags for this exact deployment.
   workers: 1,
   forbidOnly: Boolean(process.env.CI),
   retries: 0,
   reporter: [["list"]],
-  timeout: 90_000,
+  // Generous relative to `playwright.config.ts`'s local/MSW suite: the
+  // real backend's own health-poll warm-up (in `liveSmoke.spec.ts`'s
+  // `beforeEach`, up to 90s on a cold Render free-tier instance) plus
+  // the actual UI journey both count against this same per-test budget.
+  timeout: 240_000,
   use: {
     baseURL: "https://rythdg.github.io/LitList/",
     trace: "retain-on-failure",
@@ -33,6 +43,14 @@ export default defineConfig({
     {
       name: "chromium",
       use: { ...devices["Desktop Chrome"] },
+    },
+    {
+      name: "firefox",
+      use: { ...devices["Desktop Firefox"] },
+    },
+    {
+      name: "webkit",
+      use: { ...devices["Desktop Safari"] },
     },
   ],
 });
