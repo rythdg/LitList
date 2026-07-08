@@ -91,6 +91,23 @@ Do not delete or rewrite prior entries.
 
 ## RESUME POINT — read this first if picking this build back up
 
+**No work has happened since this was last written — this is still
+the current state.** Confirmed via `git status`/`git log`: working
+tree clean, HEAD at `40e1cd2`.
+
+**NEXT STEPS, in order:**
+1. Human: finish Render env vars, update Zotero's registered callback
+   URL, optionally set up branch protection (see "manual remainder"
+   below for the full list).
+2. Once Render is live and confirmed healthy (`curl
+   https://litlist-backend.onrender.com/api/v1/health`), either (a)
+   have the human complete a real Zotero login to finish the live
+   functional test's last step, or (b) move on to Tier 6's automated
+   tracks (6A/6B/6E — Playwright-drivable) against the real deployed
+   frontend, deferring 6C/6D/6F's manual/real-device parts.
+3. Nothing is currently blocked or in-progress on the orchestrator
+   side — pick up either of the above whenever the human is ready.
+
 **State as of 2026-07-06:** Tiers 0-5 (automated parts) are fully
 built, verified, committed to `main` and PUSHED to the real remote
 (github.com/rythdg/LitList), working-tree-clean. Backend: 221/221
