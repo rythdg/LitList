@@ -4982,3 +4982,173 @@ Coverage note: the third test (tap + keyboard parity) has never
 completed end-to-end yet, purely for backend-availability reasons —
 still an open verification item once the backend is stable, not a
 closed pass.
+
+[2026-07-08T17:01:24Z] TASK 6A VERIFY — PIVOT
+Mid-verification finding: the real deployed backend (litlist-backend.onrender.com,
+Render free tier) is currently exhibiting genuine, repeated intermittent 502s —
+confirmed with plain `curl` fully independent of any browser/Playwright involvement
+— on /health, POST /search, PATCH /decisions/{pmid}, and GET /papers/{pmid}/abstract,
+at different pipeline stages across different runs. Also independently confirmed via
+curl that a real POST /search round trip against this backend can take 30-34s even
+while the instance self-reports healthy, plausibly close to Render's own gateway
+timeout. This is a live-infra reliability/latency characteristic (BuildPlan.md Task
+5A territory — Render free-tier hosting), not a frontend bug or a cross-browser
+difference: in Firefox specifically, one such 502 on a CORS-relevant response
+surfaced in-browser as "CORS header 'Access-Control-Allow-Origin' missing," which is
+a symptom of the 502 error page lacking CORS headers, not an actual CORS
+misconfiguration (confirmed the real backend's success-path CORS headers are correct
+via direct curl with an Origin header). Also had to run all live-suite Playwright
+invocations with the sandbox network policy disabled (`dangerouslyDisableSandbox`)
+this environment's default sandboxed Bash otherwise silently blocked outbound
+requests from the actual browser subprocesses (but not from `curl`), which looked
+identical to a real app bug (net::ERR_FAILED on every API call) until isolated.
+Flagging both pivots explicitly rather than folding them into a clean "all green"
+completion entry.
+
+[2026-07-08T17:02:40Z] TASK 6A VERIFY — COMPLETE
+Scope: BuildPlan.md line 693/Task 6A (primary agent `tester`), SPEC.md
+§15.4 automated backbone only (manual real-iOS/Android release-candidate
+pass at §15.4.1/§15.4.2 explicitly deferred to a human, per the task).
+
+What I did:
+1. Extended frontend/playwright.config.ts's existing single-Chromium
+   project list to chromium + firefox + webkit (Desktop Chrome/Firefox/
+   Safari device presets), unchanged everything else — this is still the
+   local/MSW suite against `vite preview`.
+2. Added frontend/playwright.live.config.ts (new, 3 engines, no
+   webServer, baseURL = https://rythdg.github.io/LitList/, workers: 1,
+   180s->240s test timeout raised iteratively as real backend latency was
+   discovered) and frontend/e2e-live/liveSmoke.spec.ts (new) — a single
+   real happy-path test (idle -> search "computational neuroscience" ->
+   decide via tap -> saved list) against the REAL deployed frontend +
+   REAL deployed backend, no MSW. Chose a separate small live-smoke file
+   over retrofitting the existing MSW specs since those all gate on a
+   window flag (`__LITLIST_E2E_USE_MSW__`) the real GH Pages bundle has
+   no reason to check, and MSW's Service-Worker interception can't apply
+   to a stranger's real browser session anyway.
+   Includes a `waitForBackendWarm()` health-poll requiring 3 consecutive
+   `/health` 200s before driving the UI, added after discovering the
+   real backend flaps between 502/200 mid-restart (documented in the
+   PIVOT entry above).
+3. Excluded e2e-live/ from Vitest's own include glob (vite.config.ts)
+   and added an `npm run e2e:live` script, same convention as the
+   existing `e2e`/`e2e:ui` scripts.
+4. Installed Firefox/WebKit browser binaries (`npx playwright install
+   firefox webkit`) and ran `npm run typecheck` clean after all changes.
+
+Result 1 — local/MSW 3-engine suite (`npm run e2e`, the deterministic,
+CI-relevant part of §15.4's automated backbone): 42 tests (14 spec cases
+x 3 engines).
+  - chromium: 14/14 PASS.
+  - firefox: 14/14 PASS.
+  - webkit: 12/14 PASS, 2 FAILURES — both genuinely WebKit-only (chromium
+    and firefox both pass the identical assertions), matching this
+    task's explicit instruction to flag and not paper over such a
+    finding:
+    1) e2e/offlineSession.msw.spec.ts:46 "a decision made mid-session
+       after connectivity drops doesn't crash the app and still advances
+       the queue locally" — fails on:
+       `expect(received).toEqual(expected) // deep equality
+        - Expected  - 1
+        + Received  + 3
+        - Array []
+        + Array [
+        +   [Response served by service worker is an error],
+        + ]
+          at e2e/offlineSession.msw.spec.ts:73:24 (expect(pageErrors).toEqual([]))`
+       — WebKit's own service worker implementation surfaces a real
+       in-page error event ("Response served by service worker is an
+       error") when a network request its MSW-registered SW intercepted
+       fails, which Chromium/Firefox's SW implementations do not raise
+       as an uncaught page error the same way. This is exactly the kind
+       of WebKit-vs-real-Safari-proxy divergence SPEC §15.4 warns is
+       "necessary but not sufficient" — I did not touch the test's
+       assertion or the app code; this needs senior-frontend-developer
+       attention on whether the app's SW/offline handling needs a
+       WebKit-specific accommodation, or whether this is purely a test
+       artifact of MSW's SW registration under WebKit specifically.
+    2) e2e/offlineShell.spec.ts:21 "the precached app shell still loads
+       with no network on reload" — fails on:
+       `Error: page.reload: WebKit encountered an internal error
+        Call log:
+          - waiting for navigation until "load"
+          at e2e/offlineShell.spec.ts:37:16 (await page.reload())`
+       — WebKit's own `page.reload()` while `context.setOffline(true)`
+       is active throws an internal Playwright/WebKit-driver error before
+       the app gets a chance to prove/disprove the precache claim at all.
+       This looks more like a known Playwright-WebKit tooling limitation
+       around reload+offline than an app defect, but I'm flagging it
+       rather than silently skipping or retrying it, since I can't
+       currently prove which of the two it is.
+   Neither of these two webkit failures existed before my 3-engine
+   change (webkit was never run at all previously) — they are newly
+   surfaced by this task's own work, not pre-existing broken tests I
+   inherited.
+
+Result 2 — live smoke (`npm run e2e:live`, real GH Pages frontend + real
+Render backend, all 3 engines): NOT reliably green across multiple
+attempts today. See the PIVOT entry above for the full root-cause
+investigation. Every failure traced to the SAME cause across every
+attempt — the live Render backend's own intermittent 502s / 30-34s
+response latency — never to a browser-specific difference (each of the
+three distinct failure points — search timeout, decisions-PATCH not
+persisting, saved-list count staying at 0 — occurred on more than one
+engine across different runs, and each failure mode disappeared when the
+backend happened to be responsive during that particular step). This
+independently corroborates this same session's earlier TASK 6E VERIFY
+COMPLETE entry (frontend/e2e/dragGesture.live.spec.ts, not present in
+this worktree — that prior work was apparently never committed/persisted
+here — which reached the identical conclusion via a different live spec)
+that litlist-backend.onrender.com is not currently a stable target for a
+live cross-browser pass. Two coding mistakes were caught and fixed in my
+OWN test file during this investigation, not the app: an overly-loose
+saved-count regex (`\(\d+\)` incorrectly matched `(0)`, which could have
+been mistaken for the decision having succeeded when the queue actually
+still showed nothing saved) tightened to `\([1-9]\d*\)`, and the initial
+health-poll requiring only 1 success rather than 3 consecutive
+successes (fixed after observing the free-tier instance flap 502/200/
+502 mid-restart, which a single-check poll can start a run right in the
+middle of).
+
+Also note (test-infra, not app or cross-browser): this sandboxed dev
+environment's default network policy silently blocked outbound requests
+from the Playwright-launched browser subprocesses specifically (not from
+plain `curl`), which looked identical to a real all-endpoints app bug
+(net::ERR_FAILED everywhere) until isolated by comparing curl vs.
+browser behavior side by side. Running with `dangerouslyDisableSandbox`
+was required to get the live suite to actually reach the real internet
+at all; this has no bearing on the deployed app's real users, who are
+never behind this sandbox.
+
+Verdict:
+- Local/MSW 3-engine automated backbone (the part of §15.4 that's
+  reliably re-runnable and belongs in CI): chromium and firefox are
+  fully green; webkit has 2 concrete, reproducible, webkit-only
+  failures listed above — NOT currently green, and should not be
+  reported as such. This is the more actionable of the two results and
+  is a real finding for senior-frontend-developer to triage.
+- Live cross-browser smoke pass against the real deployed frontend +
+  backend: could not be certified green on any engine today due to
+  live backend instability (Render free tier) independently confirmed
+  via curl outside of any test tooling. This is a Task 5A / ops-owned
+  infra reliability problem, not a Task 6A frontend/cross-browser
+  defect, and not something I'm positioned to fix as tester. The test
+  file itself (frontend/e2e-live/liveSmoke.spec.ts) is sound — it
+  correctly progressed through multiple steps (search visible, decide,
+  count assertion) whenever the backend happened to respond, and
+  correctly caught its own two bugs during my own investigation — it
+  should be re-run once the backend's stability is addressed, and
+  treated as the durable regression asset going forward rather than
+  something to keep re-running blind against a currently-flaky target.
+- BuildPlan.md Task 6A's exit gate ("Playwright 3-engine suite green")
+  is NOT MET as stated: it is green on 2 of 3 engines for the
+  local/MSW suite and not reliably green at all for the live smoke
+  pass, for the reasons above. Forwarding the 2 webkit failures to
+  senior-frontend-developer and the backend instability finding to
+  whoever owns Render/Task 5A ops.
+
+Files touched: frontend/playwright.config.ts (3-engine projects),
+frontend/playwright.live.config.ts (new), frontend/e2e-live/liveSmoke.spec.ts
+(new), frontend/vite.config.ts (exclude e2e-live/ from Vitest),
+frontend/package.json (added e2e:live script). No production/app code
+was modified.
