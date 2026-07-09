@@ -333,17 +333,90 @@ stricter tested equivalents already exist).
   by resuming that agent). Worth tightening the instructions on this if
   Tier 6 is ever re-run.
 
+## 2026-07-09 — NCBI_API_KEY set; backend reliability partially improved, not closed; design/assets gap identified
+
+- Human set `NCBI_API_KEY` (+ confirmed via Render dashboard that recent
+  failed health-check events are now reporting healthy) in Render's
+  production env vars, redeployed. Re-verified live via repeated `curl`
+  against the real backend before and after:
+  - Before the key: successful `POST /search` calls took 30-57s (when
+    they succeeded at all); `/health` and the DB-only
+    `GET /search/settings` stayed fast/reliable throughout, isolating the
+    slowness to the outbound NCBI call specifically.
+  - After the key + redeploy settled (redeploy itself caused ~1-2 min of
+    502s on ALL endpoints including `/health`, expected instance-cycle
+    noise, not a new bug): successful searches now complete in ~4.4s
+    (was 30-57s) — the key clearly fixed the rate-limit-backoff
+    component of the slowness.
+  - Still open: ~1 in 3 search attempts still fails (502 or a full 30s
+    timeout) even post-fix, while `/health`/`/search/settings` stay
+    100% reliable in the same window. This isolates to something in the
+    Render-egress-to-NCBI network path itself (connection-level
+    timeouts, not 429s) — `backend/app/integrations/pubmed.py`'s retry
+    loop (`_get`, lines 229-284) does retry on `httpx.HTTPError` (covers
+    connect/read timeouts) up to `_MAX_RETRY_ATTEMPTS=3` at a 10s
+    per-attempt timeout, so a fully-failing request can still burn up to
+    ~40s before giving up. Not fixed yet — two options on the table for
+    whoever picks this up: (a) just monitor, this may be transient
+    external network flakiness between Render's free tier and NCBI that
+    fluctuates on its own; (b) tune the retry budget (lower per-attempt
+    timeout, e.g. 6s, and/or fewer attempts) so a genuinely-failing
+    request fails fast into the existing `service_unavailable`
+    graceful-degradation path (§13.6) instead of hanging ~30-40s. Not
+    done without the human's go-ahead since it's a real behavior change,
+    not just a config tweak.
+- Separately investigated (on request): whether `design/assets/`'s
+  Claude-Design `.dc.html` component prototypes (LLButton, LLPaperCard,
+  LLSearchSettingsPanel, LLSavedListPanel, LLZoteroPushDialog,
+  LLAbstractReader, LLToast, etc. — 20 files + support.js) are actually
+  reflected in the shipped frontend. **Verdict: only narrowly used.**
+  `frontend/src/gestures/useSwipeToDecide.ts` explicitly ports
+  `LLPaperCard.dc.html`'s drag-to-decide *math only* (axis-lock,
+  110px commit threshold, rotate/translate transform, overlay fade) —
+  this matches BuildPlan.md's Task 4A reconciliation notes exactly
+  (lines 587-610), which explicitly scoped the prototype folder as
+  "an interaction/animation spec to reimplement... not code to
+  copy-paste" and explicitly discarded its playback engine/state
+  management in favor of the already-tested real implementations.
+  Everything else — every other LL-prefixed component's actual visual
+  design (colors, layout, chrome) — was never ported and has zero
+  presence in `frontend/src/` (`grep -rn "design/assets\|LL[A-Z]"
+  frontend/src` returns exactly one hit, the swipe-math docstring
+  citation above). The `.dc.html` files themselves are never
+  imported/built into anything; they're prototype artifacts only.
+  **If a design-system-faithful UI is wanted, this is unbuilt work, not
+  a bug** — proposed path (not started, no agent dispatched yet):
+  1. Render each `.dc.html` for real (headless browser/Playwright) and
+     screenshot it as ground truth, rather than working from raw markup.
+  2. Extract actual design tokens (color/typography/spacing/radius/
+     shadow) from that CSS into the frontend's Tailwind config as one
+     source of truth.
+  3. Restyle each real component against its token-matched screenshot
+     reference, screen by screen.
+  4. Add Playwright visual-regression snapshots per key screen as a new
+     gate, since nothing today protects visual fidelity once matched.
+  Discussed two scopes: a full pass (all ~20 components, higher effort,
+  consistent result) vs. highest-impact-first (just PaperCard/
+  SearchSettingsPanel/SavedListPanel, faster but leaves the rest
+  inconsistent meanwhile). No decision made yet — human said to log this
+  and resume later.
+
 **NEXT STEPS, in order:**
-1. Human: check Render's dashboard for `litlist-backend` — restart/
-   memory logs around 2026-07-08 16:00-17:15 UTC, and confirm whether
-   `NCBI_API_KEY` is actually set in production. This blocks further
-   productive live testing (6C/6D/6F all need a backend that responds
-   reliably) and is degrading real users' search experience right now.
-2. Once backend reliability is understood/fixed: dispatch
-   `senior-frontend-developer` to fix the two WebKit-only bugs above,
-   tester+adversarial re-verify, then re-run 6A/6E's live-smoke assets
-   to actually close their exit gates.
-3. 6C (real Zotero OAuth smoke test) and 6F (rate-limit load test)
+1. Decide + resume on the backend retry-budget tuning question above
+   (monitor vs. tighten timeout/retry budget) — low effort either way,
+   mostly needs the human's preference since it's a real behavior change.
+2. Decide + resume on the design/assets reconciliation work above (full
+   pass vs. highest-impact-first vs. leave as-is) — this is genuinely new
+   scoped work, not a quick fix, and needs the human's go-ahead on scope
+   before dispatching any agent on it. First concrete step if resumed:
+   render+screenshot all 20 `.dc.html` files and extract design tokens,
+   before touching any real component.
+3. Dispatch `senior-frontend-developer` to fix the two WebKit-only bugs
+   found in Tier 6A (`e2e/offlineSession.msw.spec.ts:46`,
+   `e2e/offlineShell.spec.ts:21`), tester+adversarial re-verify, then
+   re-run 6A/6E's live-smoke assets to actually close their exit gates
+   now that the backend is mostly (not fully) reliable.
+4. 6C (real Zotero OAuth smoke test) and 6F (rate-limit load test)
    still need to run — 6C needs the human's real Zotero sandbox login,
-   6F should wait until the backend reliability issue is resolved so its
-   results aren't confounded with the existing instability.
+   6F should wait until backend reliability is fully resolved (item 1
+   above) so its results aren't confounded with residual instability.
