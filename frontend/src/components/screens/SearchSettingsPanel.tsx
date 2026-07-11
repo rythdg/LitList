@@ -184,7 +184,13 @@ export function SearchSettingsPanel({
       </fieldset>
 
       {error || isOffline ? (
-        <ErrorState context="generic" error={error} isOffline={isOffline} onRetry={onRetry} />
+        <ErrorState
+          context="generic"
+          error={error}
+          isOffline={isOffline}
+          onRetry={onRetry}
+          retryDisabled={isLoading}
+        />
       ) : null}
 
       {/* Task PERF-3: also disabled while a search is in flight — a live
