@@ -5152,3 +5152,216 @@ frontend/playwright.live.config.ts (new), frontend/e2e-live/liveSmoke.spec.ts
 (new), frontend/vite.config.ts (exclude e2e-live/ from Vitest),
 frontend/package.json (added e2e:live script). No production/app code
 was modified.
+[2026-07-11T13:21:45] TASK PERF-2 VERIFY — START
+Verifying worktree agent-a007cfb93d46f4645 commit 75eb95e: pooled httpx clients, retry-budget tightening (pubmed timeout 6s, 1 retry, Retry-After cap 3s; icite pooled 6s never-raise; lifespan closes singletons). Checking §15.1/§15.8 (outbound pacing), §7.6/§7.7/§13.6 conformance, sanitized-error security regression. Will run full suite non-fail-fast myself.
+[2026-07-11T13:23:20] TASK PERF-3 VERIFY — START
+Independently verifying frontend search pending/error UX fix in worktree agent-a47330628b1a83d9c (commit 9076551) against §15.2; will run vitest, tsc, read diff, check new tests are non-vacuous, and check SPEC §5/§13.6 copy conformance.
+[2026-07-11T13:32:00] TASK PERF-2 VERIFY — COMPLETE
+Verified worktree agent-a007cfb93d46f4645 @ 75eb95e, ran everything
+myself in that worktree with the main backend venv.
+
+1. Full suite (pytest -q, non-fail-fast): 225 passed, 2 skipped
+   (pre-existing Turso-credential-gated skips), 8.48s. Matches the
+   specialist's claim exactly. Zero failures.
+2. Diff read line by line, claims confirmed:
+   - pubmed.py: `_http` lazily-created long-lived AsyncClient,
+     `_http_client()` recreates on is_closed, `aclose()` added; `_get`
+     now calls `self._http_client().get(...)` (no per-call `async with
+     AsyncClient`). timeout default 10.0 -> _DEFAULT_TIMEOUT_SECONDS=6.0,
+     _MAX_RETRY_ATTEMPTS 3 -> 1, new _MAX_RETRY_AFTER_SECONDS=3.0
+     enforced in _parse_retry_after via min(value, cap) (also fixes
+     value<=0 to default 1.0).
+   - Pooling genuinely reuses one client: creation is in a sync method
+     with no awaits (atomic on the event loop, no create race), and
+     app/clients.py lru_cache(maxsize=1) providers make it one per
+     process. Routes depend on those providers (checked search.py,
+     queue.py imports).
+   - icite.py: same pooling pattern, _DEFAULT_TIMEOUT 6.0,
+     single-attempt; all httpx.HTTPError + JSON ValueError still caught
+     -> ICiteResult(available=False) — §7.6 never-raise preserved.
+   - main.py lifespan: `await get_pubmed_client().aclose()` +
+     `await get_icite_client().aclose()` after yield; no-op-safe.
+3. Budget test (test_default_worst_case_latency_budget_is_under_15s)
+   would genuinely fail on regression: computes from client._timeout /
+   client._max_retry_attempts / imported _MAX_RETRY_AFTER_SECONDS.
+   timeout back to 10s => 2*(10+0.33)=20.7>15 FAIL; retries back to 3 =>
+   4*(6+0.33)=25.3>15 FAIL; deleting the cap constant => ImportError.
+   Retry-After cap behavior also tested end-to-end with a 300s header
+   asserting max(fake.sleep_calls)==3.0.
+4. §7.7 pacing: `await self._rate_limiter.acquire()` still first thing
+   inside the retry loop, before every attempt; fake-clock pacing tests
+   untouched (in the 31 passing tests of test_pubmed_client.py +
+   test_icite_client.py). §13.6: PubMedUnavailableError still caught in
+   routes/search.py:150 and routes/queue.py:180,239 ->
+   service_unavailable(503). Inbound rate-limit middleware untouched
+   (§15.8 outbound/inbound separation intact).
+5. Security: ran
+   test_403_response_does_not_leak_api_key_or_email_in_exception alone
+   — PASSED. The no-raise_for_status sanitized-error comment/behavior in
+   _get is untouched in the diff. ruff clean, mypy clean (33 files),
+   both re-run by me.
+
+Non-blocking coverage notes (honest gaps, not failures):
+a) The "an attempt burns timeout OR sleeps backoff, never both" model
+   is slightly optimistic: a 429 response arriving just under the 6s
+   timeout burns ~6s AND sleeps the 3s cap, so true worst case is
+   ~15.3s, marginally over the stated <15s (still ~2.6x better than the
+   old ~40s). Also httpx timeout=6.0 is per-operation (connect/read/
+   write), not wall-clock per attempt. The improvement claim stands;
+   the framing is a touch tight. Worth a comment fix at most.
+b) Pre-existing, not a PERF-2 regression: icite.py's `body.get("data")`
+   would raise AttributeError if iCite ever returned a JSON array
+   instead of an object — only httpx.HTTPError/ValueError are caught.
+   Out of scope for this gate.
+Verdict: GATE MET — PERF-2 is safe to merge. All 5 verification points
+confirmed against the actual code and actual runs, no failures.
+
+[2026-07-11T07:56:00] TASK PERF-1 VERIFY — START
+Independent pre-merge verification of PERF-1 (backend DB round-trip
+batching, worktree agent-a05f63f215948062b @ b5e6986). §15.1 (backend
+unit) + §15.8-adjacent perf claims. Plan: run full backend suite in the
+worktree with the shared venv (non-fail-fast), read the full diff,
+audit §7.6 iCite-degradation semantics + CONTRACTS.md response shapes,
+scrutinize the statement-counting tests' layer/budget realism, security
+check on middleware change (rotation/signing untouched, lazy Zotero dep
+keyed only on middleware-authenticated session_id), and audit
+expire_on_commit=False for post-commit stale reads.
+[2026-07-11T13:32:00] TASK PERF-3 VERIFY — COMPLETE
+Scope: frontend search pending/error UX fix, worktree
+agent-a47330628b1a83d9c @ 9076551. Applicable subsection: §15.2
+(frontend unit — Vitest/RTL); correct tooling used, no framework drift.
+
+1. Suite run (myself, in the worktree, non-fail-fast default):
+   `npm test` → Test Files 34 passed (34), Tests 173 passed (173).
+   Matches the claimed 173/173. `npx tsc -b --noEmit` clean, eslint
+   clean on all six touched files.
+2. Diff read in full (`git show 9076551`): matches every claim.
+   Start is genuinely `disabled={queryIsBlank || isLoading}` (not just
+   relabeled); the role="status" spinner and `search-loading-spinner`
+   testid are untouched; `apiErrorOrNull` is unchanged and still used
+   by queue/abstract surfaces — only the search panel's `error` prop
+   now goes through the new `searchErrorBodyOrNull()`.
+3. Non-vacuity PROVEN by reverting only the two implementation files
+   (App.tsx, SearchSettingsPanel.tsx) to 9076551^ and re-running the
+   two test files: both new tests fail on old code with real errors —
+   - SearchSettingsPanel.test.tsx "disables Start and relabels it
+     'Searching…' while a search is pending (PERF-3)":
+     TestingLibraryElementError: Unable to find an accessible element
+     with the role "button" and name `/searching/i`
+   - App.test.tsx "shows the generic error (not nothing) when a search
+     fails with a non-ApiError network rejection while online":
+     TestingLibraryElementError: Unable to find an element by:
+     [data-testid="error-state"]
+   Implementation files then restored to 9076551; worktree clean.
+   The panel test also asserts toBeDisabled() on the found button and
+   that no residual /start/i button remains, so a relabel-only or
+   disable-only implementation would each still fail it.
+4. SPEC conformance: §5.2's loading-state requirement (inline spinner
+   near the search field, no full-screen blocker, other fields stay
+   editable) is preserved; "Start ▶" label kept in the idle state;
+   nothing in §5.2 requires Start to stay clickable while pending.
+   §13.6's service_unavailable copy path in errorCopy.ts is untouched;
+   the synthesized {code:"network_error"} falls through getErrorCopy's
+   generic branch ("Something went wrong" + GENERIC_ERROR_MESSAGE +
+   Retry), and isOffline still wins first, so the offline copy can't
+   be masked. GENERIC_ERROR_MESSAGE is a re-export of the pre-existing
+   string — single copy source, no drift.
+
+Coverage-sufficiency notes (non-blocking, for the record):
+- handleStart() has no internal isPending guard — safe today because
+  the disabled button is its only user-facing trigger, but §5.2's
+  (currently unimplemented) submit-on-Enter for the search field, or a
+  future swipe-up-to-start gesture wiring, would bypass the disable.
+  Whoever implements those paths must add the guard + a test then.
+- "network_error" is a client-synthesized code not in CONTRACTS.md
+  §2's pinned table; typechecks via ApiErrorCode's open union and
+  never crosses the wire — acceptable, but it is client-only.
+- Real-browser (§15.4/§15.10) coverage of the pending state is outside
+  this unit-level task's scope; not counted against the gate.
+
+Verdict: PERF-3 gate MET. Specialist's report verified accurate in
+every checked particular; safe to merge.
+
+[2026-07-11T08:05:00] TASK PERF-1 VERIFY — COMPLETE
+Verified worktree agent-a05f63f215948062b @ b5e6986 against the five
+requested checks. All test runs done myself with the shared venv,
+non-fail-fast, from the worktree's backend/.
+
+1. Full suite: 225 passed, 2 skipped (the 2 pre-existing Turso
+   live-integration skips), 8.47s — matches the specialist's claim
+   exactly. Zero failures.
+2. Diff audit: all five batching claims match the code.
+   - _shared.py: get_papers_by_pmid is one SELECT..WHERE pmid IN(...);
+     used by upsert_papers_from_esummary AND both branches of
+     apply_citation_counts; insert_pending_decisions is a single Core
+     executemany INSERT. §7.6 semantics preserved verbatim: unavailable
+     branch returns existing citation_count (stale-but-real or None) and
+     writes NOTHING (test asserts zero INSERT/UPDATE statements);
+     available branch still only writes when paper exists AND count is
+     not None; missing-pmid → None distinction intact.
+   - search.py: bulk session-scoped DELETE (isolation boundary
+     unchanged — WHERE session_id = current session only).
+   - queue.py: batched Paper SELECT in get_queue, shared bulk insert
+     in _fetch_next_page.
+   - Response shapes: QueueItem/QueueResponse construction unchanged,
+     all 10 pinned CONTRACTS.md QueueItem fields present; the search
+     budget test also asserts items order + total_count from the body.
+   - QueueDecision Core INSERT skips no Python-side defaults: model has
+     only id (autoincrement), decided_via/decided_at default None —
+     identical rows to the old ORM path.
+3. Statement-counting tests: counted at the right layer
+   (before_cursor_execute = one event per cursor execution, executemany
+   batch = 1). Empirically confirmed the old patterns fail these
+   assertions under the test's SQLite engine: a per-pmid db.get loop
+   produces 20 SELECT events, and the old ORM add-loop of 20
+   QueueDecision rows produces 20 separate INSERT cursor events (no
+   insertmanyvalues collapse — verified by running both patterns
+   directly). The <=12 budget is real: I independently measured the
+   citations-sort cold-session POST /search at exactly 9 statements
+   (session INSERT, search_session SELECT+INSERT, decision DELETE,
+   2x paper SELECT, paper INSERT, paper citation UPDATE, decision
+   INSERT) — matches the claimed 9.
+4. Security: diff touches nothing in _sign/_verify/rotation/
+   OAuthSessionBinding (grep of the diff for those symbols: empty).
+   get_current_zotero_connection resolves strictly from
+   request.state.session.session_id (middleware-authenticated), no
+   request-controlled input; cached via a proper _UNSET sentinel so a
+   legitimate None is cached too. No other code reads
+   request.state.zotero_connection. Zotero route tests run explicitly
+   and named: tests/test_zotero_routes.py (15 tests incl.
+   test_callback_rejects_session_mismatch,
+   test_successful_callback_stores_encrypted_connection_and_rotates_session,
+   test_collections_requires_connection, test_push_requires_connection,
+   test_list_collections_returns_key_and_name_when_connected,
+   test_disconnect_removes_connection_and_is_idempotent) +
+   tests/test_zotero.py (7) + tests/test_session_middleware.py (3):
+   25/25 passed.
+5. expire_on_commit=False: introduced ONLY in the middleware DBSession
+   and the lazy zotero-dep DBSession. Session model has all-Python-side
+   default_factory fields (session_id/created_at/last_seen_at), so no
+   server-generated value needs a post-commit refresh; session_row is
+   detached-with-loaded-attrs when handed to routes, same as before.
+   Route sessions via get_session are untouched; search.py builds all
+   QueueItems from ORM attrs BEFORE db.commit(). No stale-object
+   pattern found.
+   Ruff clean ("All checks passed!"), mypy clean (33 files).
+
+Coverage gaps (non-blocking, flagged honestly):
+a) No test exercises the stale branch of _last_seen_is_stale — i.e.
+   that last_seen_at DOES get written once >=60s have passed. If that
+   predicate were inverted, every current test would still pass and
+   last_seen_at would freeze at creation, which matters once §9.5's
+   30-day inactivity purge is implemented (it isn't yet). Recommend a
+   follow-up test with a frozen/backdated last_seen_at.
+b) SPEC §9.2's Session table doc says last_seen_at is "Updated on each
+   request" — now 60s-coarse. Behaviorally fine for a 30-day window,
+   but it's an undocumented spec deviation; specialist flagged it in
+   their log, SPEC text not updated.
+c) The specialist's PERF-1 START/COMPLETE log entries exist only in the
+   worktree's copy of logs/senior-backend-developer.build.log (will
+   arrive on merge), not yet in the main repo's — noting for the
+   coordinator, not a code issue.
+
+Verdict: GATE MET — PERF-1 is safe to merge. Every claim in the task
+handoff verified true by independent run/measurement; no failures; the
+statement-count tests would genuinely catch an N+1 regression.

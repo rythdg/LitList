@@ -2374,3 +2374,141 @@ independent re-derivation. The one significant gap tester's report did
 not surface is the .gitignore/WAL-sidecar-file interaction (finding 1),
 which is a genuine, concretely-reproduced side effect of introducing WAL
 mode that should be patched before merge.
+
+[2026-07-11T00:00:00] REVIEW: PERF-2 (httpx client pooling + retry-budget tightening, worktree agent-a007cfb93d46f4645 @ 75eb95e) — START
+Probing: shared AsyncClient races/loop-binding, retry budget vs §13.6 degradation, Retry-After 3s cap vs §7.7, lifespan aclose, secret leakage in new exception paths, fake-clock test integrity.
+
+[2026-07-11T13:35:00] REVIEW: PERF-3 (frontend search pending/error UX) — START
+Worktree agent-a47330628b1a83d9c, commit 9076551. Probing: stuck-disabled
+Start with no timeout; error||isOffline interplay incl. offline+network_error
+and stale-error-during-pending; XSS regression class (is ApiError.message /
+exception-derived text rendered?); Retry-during-pending double-submit;
+a11y of relabeled disabled button; test non-vacuity. Note: tester's log has
+PERF-3 VERIFY START (13:23:20) but NO COMPLETE entry yet — no tester
+verdict exists to spot-check; reviewing the artifact directly.
+
+[2026-07-11T14:05:00] REVIEW: PERF-2 (75eb95e) — COMPLETE
+Verified myself: suite in the worktree = 225 passed / 2 skipped (matches
+specialist claim); diff removes zero test lines (all 8 deletions are app
+code), so "no assertion loosened" is verified; `_http_client()` is a
+sync method with no awaits, so lazy creation is NOT racy under
+concurrent first use in one event loop (the leak scenario in the review
+brief does not occur); route tests use dependency_overrides fakes, so
+the lru_cache singleton is never exercised cross-event-loop in the
+suite; Retry-After-cap test correctly asserts the 3s sleep against the
+fake clock; secret-leak guard (no raise_for_status, sanitized messages)
+intact, and the one new exception type (httpx's send-after-close
+RuntimeError) carries no URL/params. No blocking findings.
+
+Findings (most severe first):
+1. SIGNIFICANT — the "<15s worst case" claim is not actually enforced,
+   and its guard test encodes a wrong model (backend/app/integrations/
+   pubmed.py comment at _MAX_RETRY_ATTEMPTS; backend/tests/
+   test_pubmed_client.py::test_default_worst_case_latency_budget_is_under_15s):
+   (a) "an attempt costs max(timeout, backoff), never both" is false —
+   a 429 that arrives just under the 6s read timeout still incurs the
+   3s backoff sleep, so real worst case ≈ 6 + 3 + pacing + 6 ≈ 15.3s,
+   over the asserted budget; (b) httpx.AsyncClient(timeout=6.0) is
+   per-phase (connect/read/write/pool), not a total deadline — a
+   trickling NCBI response (plausibly the exact Render 30-46s
+   pathology) can hold one attempt well past 6s with no timeout firing;
+   no asyncio-level total deadline was added; (c) concrete guard
+   bypass: raising _MAX_RETRY_AFTER_SECONDS 3 -> 6 leaves the test's
+   max(timeout, cap) formula unchanged (still 6) and the test green,
+   while real worst case grows to ~18s+ — contradicting the test's own
+   docstring that loosening any knob fails it. Strict improvement over
+   the old 10s x 4 behavior, so not blocking, but the commit's central
+   quantitative claim and its regression guard are both unsound.
+2. SIGNIFICANT (process) — logs/tester.build.log has TASK PERF-2 VERIFY
+   START (13:21:45) and no COMPLETE: there is no tester verdict on
+   record to ride this merge. My own suite run substitutes for the
+   pass/fail number but not for the tester's conformance checks.
+3. MINOR — shutdown-window unsanitized path: aclose() racing a
+   coroutine between _http_client() and the send raises RuntimeError
+   ("client has been closed"), which is not httpx.HTTPError — in
+   PubMedClient it bypasses the PubMedUnavailableError mapping (falls
+   to catch-all 500; no secret leak, message has no URL), in
+   ICiteClient it escapes the never-raise §7.6 degradation contract.
+   Narrow window, prod shutdown only.
+4. MINOR (latent) — is_closed re-creation handles closed-after-lifespan
+   but not open-client-bound-to-a-dead-loop: a TestClient used without
+   a context manager (how most of this suite runs, per conftest) never
+   runs lifespan aclose, leaving the singleton's pool open across event
+   loops; any future test using the real singleton in a second loop
+   gets "Event loop is closed". No current test hits it.
+5. MINOR (pre-existing, restated by this diff) — SPEC.md's outbound
+   §10.5 text requires honoring Retry-After "by pausing ALL outbound
+   calls of that type"; the backoff sleeps only the requesting
+   coroutine and never advances the shared RateLimiter, and the new 3s
+   cap deviates further from a large upstream Retry-After. Impact
+   bounded (2 attempts, pacing intact) — flag for the spec-vs-code
+   ledger, not a merge stopper.
+Verdict: NO BLOCKING findings — merge may proceed, but finding 1 should
+go back to senior-backend-developer (fix = total-deadline wrapper, e.g.
+asyncio.timeout, around each attempt + corrected budget test), and
+finding 2 means the tester COMPLETE should land before or with the
+merge.
+
+[2026-07-11T13:48:00] REVIEW: PERF-3 (commit 9076551) — COMPLETE
+No blocking findings. 2 significant, 3 minor:
+
+1. SIGNIFICANT — Retry bypasses the new disabled-while-pending guard.
+   SearchSettingsPanel renders ErrorState whenever `error || isOffline`
+   and never passes `retryDisabled` (a prop ErrorState grew in a prior
+   post-review fix for exactly this double-fire case, per its own
+   docstring). Concrete scenario: search in flight (Start disabled,
+   "Searching…"), device drops offline mid-request -> offline ErrorState
+   appears with an ENABLED "Retry now" -> each click fires another
+   runSearch.mutate(), stacking concurrent searches — the exact failure
+   PERF-3's commit message claims eliminated. One-prop fix:
+   retryDisabled={isLoading}. Owner: senior-frontend-developer.
+
+2. SIGNIFICANT — hung request leaves Start disabled with no in-app
+   recovery. No timeout AND no AbortController (apiFetch accepts
+   `signal`; useRunSearch never passes one; no cancel affordance). A
+   stalled fetch (realistic: Render free tier already flaps 502/30-45s
+   per tester's 6A log) keeps isPending true until the browser's own
+   network timeout (~300s Chromium, longer elsewhere); during that
+   window there is no error surface and no way to retry — pre-change,
+   re-clicking Start was a crude recovery; now only a full reload is.
+   Brief excluded a client timeout, but not a cancel/abort affordance.
+   Not blocking (mutation does settle eventually; common TypeError case
+   now surfaces correctly) but the trade-off is unacknowledged.
+
+3. MINOR — `network_error` is a new code not added to CONTRACTS.md §2's
+   table, whose own rule is "any task introducing a new code should add
+   it here in the same piece of work." Client-synthesized, never on the
+   wire — should be documented as such or the rule amended.
+
+4. MINOR — data-code incoherence when offline + settled network_error
+   coincide: ErrorState's data-code prefers error.code while getErrorCopy
+   prefers isOffline, so copy says "You're offline" with
+   data-code="network_error". Test-hook/analytics only.
+
+5. MINOR — a11y: pending state likely never announced to screen readers
+   (button label swap has no live region; the role="status" spinner
+   mounts WITH its content, and live regions generally must pre-exist to
+   announce) — partly pre-existing, but PERF-3's purpose was making
+   pending visible and it does so only visually. Also `disabled` on the
+   focused Start button drops focus to body; aria-disabled + click guard
+   would preserve it.
+
+Refuted / verified clean:
+- XSS regression class: new path renders only the exported constant;
+  the raw exception message is discarded; ErrorState renders via React
+  text nodes, no dangerouslySetInnerHTML; no widening of rendered
+  server-controlled text (error.message rendering pre-existing and
+  escaped).
+- Stale-error-during-pending: React Query v5 resets mutation error on
+  mutate(), so no stale ErrorState while a new search is pending.
+- Test integrity: I ran both new tests against 9076551~1 — BOTH FAIL on
+  pre-change code, pass post-change; test-file diff is additions only,
+  zero loosened assertions (specialist's claim confirmed empirically).
+- §5.6 citation checks out (spec explicitly prefers disabling the
+  specific control over a full-screen blocker).
+Process note: tester's log has PERF-3 VERIFY START (13:23:20) with NO
+COMPLETE entry — no tester verdict existed to spot-check; this review
+is against the artifact directly. Merge should also wait for that
+verdict, not just this review.
+Recommendation: fix finding 1 (one prop) before merge; finding 2 to
+owner's judgment/orchestrator; 3-5 can trail.
