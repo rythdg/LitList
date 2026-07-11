@@ -187,13 +187,21 @@ export function SearchSettingsPanel({
         <ErrorState context="generic" error={error} isOffline={isOffline} onRetry={onRetry} />
       ) : null}
 
+      {/* Task PERF-3: also disabled while a search is in flight — a live
+        * search can legitimately take 30-45s, and an enabled Start let
+        * users stack multiple concurrent searches while the only pending
+        * feedback was the small inline spinner above. The button's own
+        * label switching to "Searching…" makes the pending state
+        * unmissable without adding any full-screen blocker (§5.6's
+        * "loading never blocks input" applies to the card stack; the
+        * panel's other fields stay editable throughout). */}
       <button
         type="button"
         onClick={onStart}
-        disabled={queryIsBlank}
+        disabled={queryIsBlank || isLoading}
         className="rounded bg-slate-900 px-4 py-2 font-medium text-white disabled:cursor-not-allowed disabled:bg-slate-300"
       >
-        Start ▶
+        {isLoading ? "Searching…" : "Start ▶"}
       </button>
     </div>
   );

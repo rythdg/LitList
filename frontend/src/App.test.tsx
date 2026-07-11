@@ -106,6 +106,32 @@ describe('App (§3.3/§5.1 — real wiring as of Task 4A)', () => {
       expect(screen.getByRole('button', { name: /^retry$/i })).toBeInTheDocument()
     })
 
+    // Task PERF-3 (user-reported): a raw network rejection (fetch throwing
+    // TypeError — DNS failure, dropped connection — while navigator.onLine
+    // is still true) was narrowed to `null` by `apiErrorOrNull`, and the
+    // search panel only renders ErrorState when `error || isOffline`, so
+    // the failed search rendered *nothing at all*. It must surface the
+    // generic error copy through the same ErrorState path instead.
+    it('shows the generic error (not nothing) when a search fails with a non-ApiError network rejection while online', async () => {
+      const user = userEvent.setup()
+      server.use(http.post(`${API_BASE_URL}/search`, () => HttpResponse.error()))
+
+      renderApp()
+      await user.click(screen.getByRole('button', { name: /swipe down to search/i }))
+      await user.type(screen.getByLabelText(/search pubmed/i), 'computational neuroscience')
+      await user.click(screen.getByRole('button', { name: /^start/i }))
+
+      const errorState = await screen.findByTestId('error-state')
+      expect(errorState).toHaveAttribute('data-code', 'network_error')
+      expect(screen.getByText(/something went wrong\. please try again\./i)).toBeInTheDocument()
+      // Not misreported as offline — the client is online; the request failed.
+      expect(screen.queryByText(/you're offline/i)).not.toBeInTheDocument()
+      // A real retry affordance, same as any server-reported failure.
+      expect(screen.getByRole('button', { name: /^retry$/i })).toBeInTheDocument()
+      // And the Start button is usable again once the search settled.
+      expect(screen.getByRole('button', { name: /^start/i })).toBeEnabled()
+    })
+
     it('shows the offline copy — distinct from service_unavailable — when networkStore reports offline', async () => {
       const user = userEvent.setup()
       renderApp()

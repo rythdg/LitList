@@ -39,6 +39,25 @@ describe("SearchSettingsPanel (§5.2)", () => {
     expect(screen.getByLabelText(/search pubmed/i)).toBeEnabled();
   });
 
+  // Task PERF-3: a live search can take 30-45s — while it's pending the
+  // Start button must be disabled (no stacking concurrent searches) and
+  // must say so visibly, not just via the small inline spinner.
+  it("disables Start and relabels it 'Searching…' while a search is pending (PERF-3)", () => {
+    render(
+      <SearchSettingsPanel
+        {...baseProps()}
+        settings={{ ...defaultSearchSettings, query: "computational neuro" }}
+        isLoading
+      />,
+    );
+    const button = screen.getByRole("button", { name: /searching/i });
+    expect(button).toBeDisabled();
+    // The existing role="status" spinner is extended, not replaced.
+    expect(screen.getByTestId("search-loading-spinner")).toBeInTheDocument();
+    // And no "Start" button remains as a second, clickable submit path.
+    expect(screen.queryByRole("button", { name: /start/i })).not.toBeInTheDocument();
+  });
+
   it("does not show a spinner in the idle (non-loading) state", () => {
     render(<SearchSettingsPanel {...baseProps()} />);
     expect(screen.queryByTestId("search-loading-spinner")).not.toBeInTheDocument();

@@ -454,3 +454,60 @@ Open: the intermittent mute-test flake from TASK 2B VERIFY remains
 unexplained (not a merge blocker per the coordinator) — documented in
 code and in this log for whoever picks it up next; no root cause
 identified by either this agent or the adversarial reviewer.
+
+[2026-07-11T00:00:00] TASK PERF-3 — START
+User-reported UX bug: a slow (33-46s) live search looks like "nothing
+works." Two confirmed gaps: (1) SearchSettingsPanel's Start button is
+only disabled on a blank query, never while a search is pending — the
+sole pending feedback is the tiny inline ⏳ spinner, and users can stack
+concurrent 40s searches; (2) App.tsx's `apiErrorOrNull` discards any
+non-ApiError rejection (e.g. a raw fetch TypeError while
+navigator.onLine is still true), and SearchSettingsPanel only renders
+ErrorState when `error || isOffline` — so a plain network failure
+renders nothing at all. Plan: disable Start while `isLoading` with a
+visible "Searching…" label (keeping the existing role="status" spinner
+and its testid intact — extend, not replace; no full-screen overlay),
+and map non-ApiError mutation failures to a generic ApiErrorBody routed
+through the existing ErrorState/errorCopy path. Explicitly NOT adding a
+client-side timeout — backend latency is being fixed separately. Files:
+frontend/src/App.tsx, frontend/src/components/screens/
+SearchSettingsPanel.tsx (+ its test), frontend/src/components/
+errorCopy.ts (export the existing generic copy constant),
+frontend/src/App.test.tsx.
+
+[2026-07-11T00:00:00] TASK PERF-3 — COMPLETE
+Did: (1) SearchSettingsPanel's Start button now disables while
+`isLoading` and relabels to "Searching…" — the pending state is visible
+at the point of action and concurrent 40s searches can no longer be
+stacked; the existing role="status" ⏳ spinner and its
+`search-loading-spinner` testid are unchanged (extended, not replaced),
+all other fields stay editable, and no full-screen blocker was added.
+(2) Fixed the swallowed-error gap in App.tsx: new
+`searchErrorBodyOrNull()` maps a non-ApiError rejection (raw fetch
+TypeError while navigator.onLine is true) to a `{code:
+"network_error", message: GENERIC_ERROR_MESSAGE}` body so it renders
+through the existing ErrorState/errorCopy path with a real Retry,
+instead of rendering nothing; `GENERIC_ERROR_MESSAGE` is now exported
+from errorCopy.ts (still the single copy source — no duplicated
+string). Scope note: `apiErrorOrNull` is untouched for the
+queue/abstract surfaces, which render ErrorState unconditionally on
+isError and already tolerate a null error body; only the search panel
+gated rendering on `error || isOffline`. Deliberately did NOT add a
+client-side request timeout per task brief (backend latency fixed
+separately).
+Worked: 2 new tests — "disables Start and relabels it 'Searching…'
+while a search is pending" (SearchSettingsPanel.test.tsx) and "shows
+the generic error (not nothing) when a search fails with a non-ApiError
+network rejection while online" (App.test.tsx, via MSW
+`HttpResponse.error()`, asserting data-code network_error + generic
+copy + Retry + Start re-enabled, and that the offline copy is NOT
+shown). Full suite: 173/173 passed across 34 files (up from 171 — the 2
+new tests; zero existing test expectations needed updating). `npx tsc
+-b --noEmit` clean, eslint clean on all touched files.
+Changed: frontend/src/App.tsx, frontend/src/components/errorCopy.ts,
+frontend/src/components/index.ts,
+frontend/src/components/screens/SearchSettingsPanel.tsx,
+frontend/src/components/screens/SearchSettingsPanel.test.tsx,
+frontend/src/App.test.tsx.
+Open: none for this task. The underlying 33-46s backend search latency
+itself is out of scope here and tracked separately.
