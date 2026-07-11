@@ -25,7 +25,10 @@ logger = logging.getLogger(__name__)
 
 BASE_URL = "https://icite.od.nih.gov/api/pubs"
 
-_DEFAULT_TIMEOUT = 10.0
+# PERF-2: 10s -> 6s. iCite is deliberately single-attempt (graceful
+# degradation per §7.6, never a retry loop), so this timeout is also the
+# whole worst-case latency this client can add to a search request.
+_DEFAULT_TIMEOUT = 6.0
 
 
 @dataclass(frozen=True)
@@ -50,6 +53,23 @@ class ICiteClient:
 
     def __init__(self, *, timeout: float = _DEFAULT_TIMEOUT) -> None:
         self._timeout = timeout
+        # PERF-2: one long-lived, lazily-created AsyncClient per instance
+        # (one per process via `app/clients.py`'s `lru_cache` provider) so
+        # keep-alive connections to icite.od.nih.gov are reused instead of
+        # a fresh TCP+TLS handshake per call. Same design as
+        # `PubMedClient` — see its `_http_client` docstring for why the
+        # `is_closed` re-creation check exists.
+        self._http: httpx.AsyncClient | None = None
+
+    def _http_client(self) -> httpx.AsyncClient:
+        if self._http is None or self._http.is_closed:
+            self._http = httpx.AsyncClient(timeout=self._timeout)
+        return self._http
+
+    async def aclose(self) -> None:
+        """Close the pooled AsyncClient (FastAPI lifespan shutdown hook)."""
+        if self._http is not None and not self._http.is_closed:
+            await self._http.aclose()
 
     async def fetch_citation_counts(self, pmids: list[str]) -> ICiteResult:
         if not pmids:
@@ -57,8 +77,7 @@ class ICiteClient:
 
         params = {"pmids": ",".join(pmids), "fl": "pmid,citation_count,relative_citation_ratio"}
         try:
-            async with httpx.AsyncClient(timeout=self._timeout) as client:
-                response = await client.get(BASE_URL, params=params)
+            response = await self._http_client().get(BASE_URL, params=params)
             response.raise_for_status()
         except httpx.HTTPError as exc:
             logger.warning(

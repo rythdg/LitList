@@ -473,6 +473,106 @@ async def test_403_response_does_not_leak_api_key_or_email_in_exception(monkeypa
         assert "secret@example.com" not in str(cause)
 
 
+# ---------------------------------------------------------------------------
+# PERF-2: connection reuse + bounded worst-case latency budget.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_get_reuses_one_pooled_http_client_across_calls() -> None:
+    """PERF-2: `_get` must reuse a single long-lived `httpx.AsyncClient`
+    (keep-alive pooling) instead of constructing a fresh one — and paying
+    a fresh TCP+TLS handshake — per request."""
+    fixture = _load_json("esearch_response.json")
+    with respx.mock(assert_all_called=True) as mock:
+        mock.get(f"{BASE_URL}esearch.fcgi").mock(
+            return_value=httpx.Response(200, json=fixture)
+        )
+        client = PubMedClient(clock=FakeClock().as_clock())
+        await client.esearch("q1")
+        first_http = client._http
+        await client.esearch("q2")
+        second_http = client._http
+
+    assert first_http is not None
+    assert first_http is second_http
+    assert not first_http.is_closed
+
+
+@pytest.mark.asyncio
+async def test_aclose_closes_pool_and_next_use_recreates_it() -> None:
+    """PERF-2: `aclose` (the lifespan shutdown hook) closes the pool; a
+    later call on the same (process-singleton) instance transparently
+    re-creates it rather than using a dead client."""
+    fixture = _load_json("esearch_response.json")
+    with respx.mock(assert_all_called=True) as mock:
+        mock.get(f"{BASE_URL}esearch.fcgi").mock(
+            return_value=httpx.Response(200, json=fixture)
+        )
+        client = PubMedClient(clock=FakeClock().as_clock())
+        await client.aclose()  # no-op before first use
+        await client.esearch("q1")
+        first_http = client._http
+        await client.aclose()
+        assert first_http is not None and first_http.is_closed
+        await client.esearch("q2")
+
+    assert client._http is not first_http
+    assert client._http is not None and not client._http.is_closed
+
+
+@pytest.mark.asyncio
+async def test_retry_after_header_is_capped() -> None:
+    """PERF-2: a huge upstream `Retry-After` (NCBI may legally send e.g.
+    300) must be capped so the user-facing worst case stays bounded."""
+    fixture = _load_json("esearch_response.json")
+    fake = FakeClock()
+    call_count = 0
+
+    def _responder(request: httpx.Request) -> httpx.Response:
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            return httpx.Response(429, headers={"Retry-After": "300"})
+        return httpx.Response(200, json=fixture)
+
+    with respx.mock(assert_all_called=True) as mock:
+        mock.get(f"{BASE_URL}esearch.fcgi").mock(side_effect=_responder)
+        client = PubMedClient(clock=fake.as_clock())
+        result = await client.esearch("q")
+
+    assert result.pmids == ["38279812", "38279813", "37000001"]
+    # The backoff sleep must be the 3s cap, not the raw 300s header.
+    assert max(fake.sleep_calls) == pytest.approx(3.0)
+
+
+def test_default_worst_case_latency_budget_is_under_15s() -> None:
+    """PERF-2: with the default timeout/retry/backoff-cap settings, a
+    genuinely-failing NCBI call must surface `PubMedUnavailableError`
+    (-> §13.6's `service_unavailable` degradation) in under ~15s.
+    Computed from the client's actual configuration — deliberately from
+    the same attributes `_get` uses, so loosening any one of them without
+    rethinking the budget fails this test."""
+    from app.integrations.pubmed import (
+        _MAX_RETRY_AFTER_SECONDS,
+        _RATE_WITHOUT_KEY,
+    )
+
+    client = PubMedClient(clock=FakeClock().as_clock())
+    attempts = client._max_retry_attempts + 1
+    pacing_interval = 1.0 / _RATE_WITHOUT_KEY  # worst case: no API key
+    # A single attempt's worst-case cost is either (a) it burns the full
+    # per-attempt timeout (a timed-out attempt retries immediately, with
+    # no backoff sleep), or (b) it gets a fast 429 and sleeps the capped
+    # Retry-After before the next attempt — never both. So each attempt
+    # contributes at most max(timeout, capped backoff), plus one pacing
+    # wait (§7.7) per attempt.
+    worst_case = attempts * (
+        max(client._timeout, _MAX_RETRY_AFTER_SECONDS) + pacing_interval
+    )
+    assert worst_case < 15.0, f"worst-case {worst_case:.2f}s breaks the <15s budget"
+
+
 @pytest.mark.asyncio
 async def test_400_response_raises_pubmed_unavailable() -> None:
     """A malformed-query 400 (not 429/5xx) must still surface as a clean,

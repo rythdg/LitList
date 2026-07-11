@@ -13,6 +13,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from sqlmodel import SQLModel
 
+from app.clients import get_icite_client, get_pubmed_client
 from app.config import settings
 from app.db import get_engine
 from app.middleware.errors import install_exception_handlers
@@ -79,6 +80,17 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     """
     SQLModel.metadata.create_all(get_engine())
     yield
+    # PERF-2: the outbound wrapper clients (§10.5) each hold one
+    # long-lived pooled `httpx.AsyncClient` (keep-alive connection reuse
+    # to NCBI/iCite instead of a per-request TCP+TLS handshake) — close
+    # them on shutdown so pooled connections don't dangle. Both `aclose`
+    # calls are no-ops if the lazily-created pool was never used, and the
+    # clients transparently re-create their pool if used again after a
+    # close (relevant to repeated `TestClient` contexts in the suite,
+    # since `app/clients.py`'s providers are process-wide `lru_cache`
+    # singletons).
+    await get_pubmed_client().aclose()
+    await get_icite_client().aclose()
 
 
 app = FastAPI(title="LitList API", version="0.1.0", lifespan=lifespan)

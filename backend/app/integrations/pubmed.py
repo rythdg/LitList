@@ -50,8 +50,23 @@ _RATE_WITH_KEY = 10.0
 # Retry policy for a 429 response (§7.9's "queue/retry with backoff" —
 # SPEC.md doesn't pin an exact attempt count, so this is a deliberate,
 # small, documented choice rather than an unbounded retry loop).
-_MAX_RETRY_ATTEMPTS = 3
+#
+# PERF-2: retries lowered 3 -> 1 (2 attempts total) and the per-attempt
+# timeout lowered 10s -> 6s, so a genuinely-failing NCBI call surfaces
+# §13.6's "PubMed is currently unavailable" degradation in well under
+# ~15s instead of burning ~40s in front of a waiting user. Worst-case
+# arithmetic with these numbers (no API key, so 3 req/s pacing):
+#   2 attempts x 6s timeout + 1 inter-attempt pacing wait (~0.33s)
+#   = ~12.4s; a 429 path is cheaper still (fast responses + one
+#   Retry-After backoff, capped below at 3s).
+_MAX_RETRY_ATTEMPTS = 1
+_DEFAULT_TIMEOUT_SECONDS = 6.0
 _DEFAULT_RETRY_AFTER_SECONDS = 1.0
+# PERF-2: honor `Retry-After` but cap it — NCBI could legally send a
+# large value (e.g. 300) and a user-facing search must not sleep that
+# long before surfacing the §13.6 degradation state. The cap keeps the
+# documented <15s worst-case budget true regardless of the header.
+_MAX_RETRY_AFTER_SECONDS = 3.0
 
 SortOption = Literal["relevance", "pub_date"]
 
@@ -217,7 +232,7 @@ class PubMedClient:
         self,
         *,
         clock: Clock | None = None,
-        timeout: float = 10.0,
+        timeout: float = _DEFAULT_TIMEOUT_SECONDS,
         max_retry_attempts: int = _MAX_RETRY_ATTEMPTS,
     ) -> None:
         self._clock = clock or Clock()
@@ -225,6 +240,31 @@ class PubMedClient:
         self._rate_limiter = RateLimiter(requests_per_second, clock=self._clock)
         self._timeout = timeout
         self._max_retry_attempts = max_retry_attempts
+        # PERF-2: one long-lived, lazily-created AsyncClient per client
+        # instance (and `app/clients.py`'s `lru_cache` provider makes that
+        # one per *process*), so keep-alive connections to
+        # eutils.ncbi.nlm.nih.gov are reused instead of paying a fresh
+        # TCP+TLS handshake on every single call. Lazy (created on first
+        # use, inside a running event loop) rather than eager so plain
+        # `PubMedClient()` construction stays synchronous and loop-free.
+        self._http: httpx.AsyncClient | None = None
+
+    def _http_client(self) -> httpx.AsyncClient:
+        """Return the shared AsyncClient, (re)creating it if absent/closed.
+
+        The `is_closed` re-creation path matters for the `lru_cache`d
+        process singleton: after a lifespan shutdown closes it (see
+        `app/main.py`), a later use — e.g. a second `TestClient` context
+        in the test suite — gets a fresh client instead of a dead one.
+        """
+        if self._http is None or self._http.is_closed:
+            self._http = httpx.AsyncClient(timeout=self._timeout)
+        return self._http
+
+    async def aclose(self) -> None:
+        """Close the pooled AsyncClient (FastAPI lifespan shutdown hook)."""
+        if self._http is not None and not self._http.is_closed:
+            await self._http.aclose()
 
     async def _get(self, endpoint: str, params: dict[str, str]) -> httpx.Response:
         """Issue one paced, backed-off GET against `endpoint`.
@@ -243,8 +283,9 @@ class PubMedClient:
         for attempt in range(self._max_retry_attempts + 1):
             await self._rate_limiter.acquire()
             try:
-                async with httpx.AsyncClient(timeout=self._timeout) as client:
-                    response = await client.get(BASE_URL + endpoint, params=all_params)
+                response = await self._http_client().get(
+                    BASE_URL + endpoint, params=all_params
+                )
             except httpx.HTTPError as exc:
                 last_exc = exc
                 logger.warning("PubMed request to %s failed: %s", endpoint, exc)
@@ -417,9 +458,14 @@ def _parse_retry_after(response: httpx.Response) -> float:
     if header is None:
         return _DEFAULT_RETRY_AFTER_SECONDS
     try:
-        return float(header)
+        value = float(header)
     except ValueError:
         return _DEFAULT_RETRY_AFTER_SECONDS
+    if value <= 0:
+        return _DEFAULT_RETRY_AFTER_SECONDS
+    # PERF-2: cap so a large upstream Retry-After can't blow the <15s
+    # worst-case latency budget for a user-facing search request.
+    return min(value, _MAX_RETRY_AFTER_SECONDS)
 
 
 def _parse_esummary_doc(doc: dict[str, Any]) -> ESummaryRecord:
