@@ -420,3 +420,29 @@ stricter tested equivalents already exist).
    still need to run — 6C needs the human's real Zotero sandbox login,
    6F should wait until backend reliability is fully resolved (item 1
    above) so its results aren't confounded with residual instability.
+
+## 2026-07-11 — Live-latency incident: root-caused and fixed (PERF-1/2/3 merged)
+
+- Incident: live search took 33-46s (user saw "nothing works"). Root
+  cause measured, three-part: (1) Turso DB is in aws-ap-south-1 (Mumbai)
+  vs Render in Oregon — ~250ms per DB statement; (2) N+1 patterns issued
+  ~50-100 sequential statements per search; (3) new httpx client + TLS
+  handshake per outbound NCBI/iCite call, 40s worst-case retry budget.
+  Frontend compounded it: only a tiny inline spinner, Start re-clickable
+  (stacking 40s requests), raw network errors rendered nothing.
+- PERF-1 merged: search now 9 statements measured (was ~50-100);
+  middleware down to ~1 statement steady-state; statement-count
+  regression tests added. PERF-2 merged: pooled clients, 6s timeouts,
+  ~13s worst-case failing call (was ~40s). PERF-3 merged: Start+Retry
+  disabled while pending with "Searching…" label; network errors surface
+  via ErrorState.
+- Process: PERF-2/3 fully verified (tester + adversarial); PERF-1
+  adversarial skipped on human token-conservation directive (see
+  orchestrator.log). Ledger items: PubMed total-deadline wrapper;
+  last_seen_at stale-branch test; SPEC §9.2 wording (60s-coarse
+  last_seen_at); CONTRACTS.md note for client-only network_error code;
+  cancel affordance for hung searches.
+- OPEN, needs human: move Turso DB to aws-us-west-2 (create new DB, swap
+  TURSO_DATABASE_URL/TURSO_AUTH_TOKEN in Render, redeploy) — remaining
+  ~250ms×9 floor becomes ~5ms×9. Schema auto-creates; data is cache +
+  ephemeral sessions, safe to abandon.

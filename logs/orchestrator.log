@@ -355,3 +355,25 @@ human's explicit request: a live functional test (real search, real
 Zotero push/reject) against local dev servers, which exercises the
 same real backend/PubMed/Zotero-OAuth/frontend stack Tier 6 cares
 about, just not through the not-yet-live cloud deployment.
+
+[2026-07-11T13:35] MERGE DECISIONS — PERF-1/2/3 (live-latency incident wave)
+- PERF-1 (DB batching): merged. tester VERIFY gate-met entry confirmed in
+  logs/tester.build.log. ADVERSARIAL REVIEW DELIBERATELY SKIPPED — human
+  directed token conservation mid-wave; orchestrator accepts the risk on
+  this task. Deviation from BuildPlan validation-checkpoint pattern,
+  logged here per protocol.
+- PERF-2 (httpx pooling + retry budget): merged. tester VERIFY (gate met)
+  + adversarial REVIEW (no blocking; 2 significant) both confirmed.
+  Significant findings accepted as ledger items, not fixed pre-merge:
+  (a) worst case ~15.3s not <15s and per-phase (not total) timeouts mean
+  a trickling response is still unbounded — follow-up: total deadline
+  wrapper; (b) budget test model misses _MAX_RETRY_AFTER_SECONDS raises.
+- PERF-3 (search pending/error UX): merged. tester VERIFY (gate met) +
+  adversarial REVIEW (no blocking) confirmed. Reviewer's significant
+  finding 1 (Retry bypassed pending guard) FIXED pre-merge by
+  orchestrator (0888db2, retryDisabled={isLoading}, panel tests green).
+  Finding 2 (hung request leaves Start disabled, no cancel affordance)
+  accepted as ledger item pending backend latency fixes landing.
+- Conflict resolution: logs/senior-backend-developer.build.log union
+  (both branches appended); .claude/settings.local.json kept local.
+- Merged-main suites: backend 233 passed, frontend 173 passed.
