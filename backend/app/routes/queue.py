@@ -61,6 +61,8 @@ from app.routes._shared import (
     ICite,
     PubMed,
     apply_citation_counts,
+    get_papers_by_pmid,
+    insert_pending_decisions,
     order_pmids_by_citations,
     pubmed_sort_for,
     upsert_papers_from_esummary,
@@ -126,15 +128,9 @@ async def _fetch_next_page(
         counts = await apply_citation_counts(db, icite_client, ordered_pmids)
         ordered_pmids = order_pmids_by_citations(ordered_pmids, counts)
 
-    for offset, pmid in enumerate(ordered_pmids):
-        db.add(
-            QueueDecision(
-                session_id=session_id,
-                pmid=pmid,
-                position=start_position + offset,
-                decision=DecisionState.pending,
-            )
-        )
+    # Single executemany INSERT for the page's decision rows (TASK
+    # PERF-1) — see `insert_pending_decisions` in `_shared.py`.
+    insert_pending_decisions(db, session_id, ordered_pmids, start_position=start_position)
     search_session.next_retstart += 20
     db.add(search_session)
     db.commit()
@@ -193,9 +189,12 @@ async def get_queue(
                     exc,
                 )
 
+        # One batched SELECT for every decision's Paper row instead of a
+        # per-decision `db.get` loop (TASK PERF-1).
+        papers = get_papers_by_pmid(db, [decision.pmid for decision in decisions])
         items: list[QueueItem] = []
         for decision in decisions:
-            paper = db.get(Paper, decision.pmid)
+            paper = papers.get(decision.pmid)
             if paper is None:  # pragma: no cover - defensive, FK-guaranteed in practice
                 continue
             items.append(_queue_item(decision, paper))

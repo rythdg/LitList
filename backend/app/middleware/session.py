@@ -32,6 +32,8 @@ import hmac
 import logging
 import secrets
 import time
+from datetime import UTC, datetime
+from typing import cast
 
 from fastapi import Request, Response
 from sqlmodel import Session as DBSession
@@ -51,6 +53,13 @@ SESSION_COOKIE_NAME = "litlist_session"
 # genuinely persistent across visits without pretending we can set a cookie
 # that outlives that ceiling.
 SESSION_COOKIE_MAX_AGE_SECONDS = 60 * 60 * 24 * 400
+
+# TASK PERF-1: `last_seen_at` is coarse bookkeeping (§9.1 retention), not
+# a security signal — writing it on literally every request cost a full
+# UPDATE+COMMIT round-trip against remote Turso per request. It is now
+# only written when the stored value is at least this stale; requests
+# inside the window skip the write (and the commit) entirely.
+LAST_SEEN_UPDATE_INTERVAL_SECONDS = 60
 
 _fallback_cookie_secret: bytes | None = None
 
@@ -79,6 +88,21 @@ def _get_cookie_secret() -> bytes:
         )
         _fallback_cookie_secret = secrets.token_bytes(32)
     return _fallback_cookie_secret
+
+
+# Sentinel distinguishing "not looked up yet" from a cached `None`
+# ("looked up, no connection") on `request.state.zotero_connection`.
+_UNSET = object()
+
+
+def _last_seen_is_stale(last_seen_at: datetime) -> bool:
+    """True when the stored `last_seen_at` is old enough to be worth an
+    UPDATE (see `LAST_SEEN_UPDATE_INTERVAL_SECONDS`). SQLite hands naive
+    datetimes back for a column written from timezone-aware `utcnow()`
+    values — normalize before comparing."""
+    if last_seen_at.tzinfo is None:
+        last_seen_at = last_seen_at.replace(tzinfo=UTC)
+    return (utcnow() - last_seen_at).total_seconds() >= LAST_SEEN_UPDATE_INTERVAL_SECONDS
 
 
 def reset_fallback_cookie_secret_for_tests() -> None:
@@ -181,27 +205,28 @@ class SessionIdentityMiddleware:
         session_id = _verify(raw_cookie) if raw_cookie else None
 
         issue_new_cookie = False
-        with DBSession(get_engine()) as db:
+        # `expire_on_commit=False` so the committed row stays readable
+        # after this session closes without a post-commit `db.refresh()`
+        # SELECT — one fewer round-trip per request (TASK PERF-1).
+        with DBSession(get_engine(), expire_on_commit=False) as db:
             session_row = db.get(SessionRow, session_id) if session_id else None
             if session_row is None:
                 session_row = SessionRow()
                 issue_new_cookie = True
-            else:
+                db.add(session_row)
+                db.commit()
+            elif _last_seen_is_stale(session_row.last_seen_at):
                 session_row.last_seen_at = utcnow()
-            db.add(session_row)
-            db.commit()
-            db.refresh(session_row)
-
-            zotero_connection = db.exec(
-                select(ZoteroConnection).where(
-                    ZoteroConnection.session_id == session_row.session_id
-                )
-            ).first()
+                db.add(session_row)
+                db.commit()
+            # else: nothing changed — skip the write and the commit
+            # entirely (TASK PERF-1). The ZoteroConnection lookup that
+            # used to happen here on every request is now lazy — see
+            # `get_current_zotero_connection` below.
 
         resolved_session_id = session_row.session_id
         scope.setdefault("state", {})
         scope["state"]["session"] = session_row
-        scope["state"]["zotero_connection"] = zotero_connection
 
         async def send_wrapper(message):  # type: ignore[no-untyped-def]
             if issue_new_cookie and message["type"] == "http.response.start":
@@ -236,8 +261,30 @@ def get_current_zotero_connection(request: Request) -> ZoteroConnection | None:
     """FastAPI dependency: the current session's `ZoteroConnection`, or
     `None` if not yet connected (§9.2). Routes needing Zotero access check
     for `None` and return the `zotero_not_connected` error (CONTRACTS.md
-    §2) rather than this dependency raising."""
-    return getattr(request.state, "zotero_connection", None)
+    §2) rather than this dependency raising.
+
+    TASK PERF-1: this lookup used to run eagerly in the middleware on
+    EVERY request — a full SELECT round-trip against remote Turso even
+    for routes that never touch Zotero. It is now lazy: only the handful
+    of routes that actually depend on this dependency (`app/routes/
+    zotero.py`) pay for the query, once per request (cached on
+    `request.state`). Security semantics are unchanged — the connection
+    is still resolved strictly by the middleware-authenticated
+    `session_id`, never from client input."""
+    cached = getattr(request.state, "zotero_connection", _UNSET)
+    if cached is not _UNSET:
+        return cast("ZoteroConnection | None", cached)
+
+    session = getattr(request.state, "session", None)
+    if session is None:
+        return None
+
+    with DBSession(get_engine(), expire_on_commit=False) as db:
+        connection = db.exec(
+            select(ZoteroConnection).where(ZoteroConnection.session_id == session.session_id)
+        ).first()
+    request.state.zotero_connection = connection
+    return connection
 
 
 class OAuthSessionBinding:

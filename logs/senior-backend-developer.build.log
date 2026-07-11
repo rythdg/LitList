@@ -2086,3 +2086,87 @@ and the real production Turso database, regression test added and
 verified via git-stash revert/restore, and both adversarial-review
 findings now documented in-code. Ready for the coordinator to close
 this out.
+
+[2026-07-11T00:00:00] TASK PERF-1 — START
+User-reported live search latency (33-46s) confirmed as N+1 DB
+round-trips against remote Turso (diagnosis supplied by coordinator, not
+re-derived): per-pmid `db.get(Paper, ...)` loops in
+`routes/_shared.py::upsert_papers_from_esummary` and
+`::apply_citation_counts` (~20 round-trips each), a per-decision
+`db.get(Paper, ...)` loop in `routes/queue.py::get_queue`, a per-row
+stale-decision delete loop in `routes/search.py`, and the session
+middleware doing get+commit+refresh+ZoteroConnection-select on EVERY
+request. Plan: batch each loop into one `SELECT ... WHERE pmid IN (...)`
+/ one bulk DELETE / one executemany INSERT with a single flush; in the
+middleware, drop the post-commit refresh (expire_on_commit=False),
+throttle the `last_seen_at` write to once per 60s window (skipping the
+commit entirely when nothing changed), and load ZoteroConnection lazily
+in `get_current_zotero_connection` instead of eagerly for every request.
+No change to session-security semantics (rotation, binding, cookie
+signing, OAuth callback binding) — those paths untouched. Response
+shapes stay exactly per CONTRACTS.md §5 (re-read before starting).
+Files owned this task: backend/app/routes/_shared.py, search.py,
+queue.py, backend/app/middleware/session.py, plus tests.
+
+[2026-07-11T00:45:00] TASK PERF-1 — COMPLETE
+Did: batched every N+1 DB pattern on the search/queue path plus the
+per-request middleware round-trips.
+
+1. routes/_shared.py — new `get_papers_by_pmid` (one
+   `SELECT ... WHERE pmid IN (...)` via `col(Paper.pmid).in_`);
+   `upsert_papers_from_esummary` and BOTH branches of
+   `apply_citation_counts` now use it instead of per-pmid `db.get`
+   loops (was 20 round-trips each), single flush per helper, unavailable
+   branch now writes nothing at all. New `insert_pending_decisions`
+   (single executemany Core INSERT for a page's QueueDecision rows —
+   the ORM add-loop flushed row-by-row because `id` is
+   server-generated). §7.6 degradation semantics preserved exactly
+   (verified by test: iCite-down leaves stale-but-real counts, returns
+   None for unknown pmids, zero writes).
+2. routes/search.py — stale-decision wipe is one bulk
+   `DELETE ... WHERE session_id = ?` (still session-scoped, §9.1/§9.2
+   isolation unchanged — existing cross-session-isolation test still
+   green); decision inserts go through `insert_pending_decisions`.
+3. routes/queue.py — `get_queue`'s per-decision `db.get(Paper, ...)`
+   loop replaced with one batched SELECT; `_fetch_next_page` uses the
+   shared bulk insert. Single-row `db.get`s elsewhere (abstract
+   endpoint, saved.py) left alone — they're 1 round-trip already.
+4. middleware/session.py — dropped the post-commit `db.refresh` SELECT
+   (`expire_on_commit=False`); `last_seen_at` UPDATE+COMMIT now only
+   happens when the stored value is >=60s stale (new
+   `LAST_SEEN_UPDATE_INTERVAL_SECONDS`; naive-vs-aware datetime
+   normalized since SQLite returns naive) — requests inside the window
+   do a single session SELECT and no write; ZoteroConnection lookup
+   moved OUT of the middleware into a lazy, request-cached
+   `get_current_zotero_connection` — only zotero routes pay for it,
+   resolved strictly by middleware-authenticated session_id as before.
+   Deliberately NOT touched: rotation, cookie signing/verification,
+   OAuth session binding — no security-semantics change anywhere.
+
+Round-trips for one 20-result POST /search (measured via
+before_cursor_execute, executemany counted once = real round-trip
+semantics): 9 statements, worst case (citations sort, cold session) —
+previously ~50-100 sequential statements (2x20 per-pmid Paper gets,
+~20 per-row decision INSERTs, per-row stale deletes, middleware
+refresh + Zotero SELECT every request). /search/settings-style
+requests inside the 60s window: 1 session SELECT + the route's own
+single SELECT, no writes.
+
+Worked: full suite 225 passed / 2 skipped (same 2 pre-existing Turso
+live-integration skips; baseline before change was 219/2 — all 219
+still green plus 6 new); ruff clean; mypy clean (33 files). New
+tests/test_perf_batching.py pins the batching: 1 Paper SELECT per
+helper call, 1 bulk DELETE + 1 executemany decision INSERT per search,
+<=12-statement request budget, zero-write repeat middleware request,
+no zotero_connection query on non-zotero routes.
+
+Changed: backend/app/routes/_shared.py, backend/app/routes/search.py,
+backend/app/routes/queue.py, backend/app/middleware/session.py,
+backend/tests/test_perf_batching.py (new).
+
+Open/flagged: (a) last_seen_at is now 60s-coarse — bookkeeping only,
+no security use found (grep: only creation/rotation set it), but
+noting the semantic change explicitly. (b) Remaining fixed latency is
+network RTT Render<->Turso times ~9 statements plus the PubMed/iCite
+calls themselves — if still too slow live, next lever is co-locating
+DB and app or an embedded libSQL replica, out of this task's scope.
