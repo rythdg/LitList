@@ -5,7 +5,8 @@
       "Read(//opt/homebrew/bin/**)",
       "Read(//opt/homebrew/Cellar/**)",
       "Bash(git init *)",
-      "Bash(git branch *)"
+      "Bash(git branch *)",
+      "Bash(curl -s https://litlist-backend.onrender.com/health)"
     ]
   }
 }

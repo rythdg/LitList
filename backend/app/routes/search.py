@@ -18,8 +18,9 @@ import logging
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ValidationError, field_validator
+from sqlalchemy import delete
 from sqlmodel import Session as DBSession
-from sqlmodel import select
+from sqlmodel import col, select
 
 from app.errors import ApiError, api_error_response, service_unavailable, validation_error
 from app.integrations.icite import ICiteClient
@@ -40,6 +41,7 @@ from app.routes._shared import (
     ICite,
     PubMed,
     apply_citation_counts,
+    insert_pending_decisions,
     order_pmids_by_citations,
     pubmed_sort_for,
     upsert_papers_from_esummary,
@@ -172,11 +174,12 @@ async def create_search(
         search_session.next_retstart = PAGE_SIZE
         db.add(search_session)
 
-        stale_decisions = db.exec(
-            select(QueueDecision).where(QueueDecision.session_id == session.session_id)
-        ).all()
-        for stale in stale_decisions:
-            db.delete(stale)
+        # One bulk DELETE instead of SELECT-all + per-row `db.delete`
+        # (TASK PERF-1) — still strictly scoped to this session_id (the
+        # §9.1/§9.2 cross-session isolation boundary is unchanged).
+        db.execute(
+            delete(QueueDecision).where(col(QueueDecision.session_id) == session.session_id)
+        )
 
         items: list[QueueItem] = []
         if esearch_result.pmids:
@@ -191,14 +194,10 @@ async def create_search(
                 counts = await apply_citation_counts(db, icite_client, ordered_pmids)
                 ordered_pmids = order_pmids_by_citations(ordered_pmids, counts)
 
+            # Single executemany INSERT for the whole page's decision
+            # rows (TASK PERF-1) — see `insert_pending_decisions`.
+            insert_pending_decisions(db, session.session_id, ordered_pmids)
             for position, pmid in enumerate(ordered_pmids):
-                decision = QueueDecision(
-                    session_id=session.session_id,
-                    pmid=pmid,
-                    position=position,
-                    decision=DecisionState.pending,
-                )
-                db.add(decision)
                 paper = papers[pmid]
                 items.append(
                     QueueItem(

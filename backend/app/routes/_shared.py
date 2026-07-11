@@ -8,14 +8,16 @@ row upsert logic (needed by both `search.py`'s initial page and
 from __future__ import annotations
 
 from fastapi import Depends
+from sqlalchemy import insert
 from sqlmodel import Session as DBSession
+from sqlmodel import col, select
 
 from app.clients import get_icite_client, get_pubmed_client
 from app.db import get_session
 from app.integrations.icite import ICiteClient
 from app.integrations.pubmed import ESummaryRecord
 from app.middleware.session import get_current_session
-from app.models.entities import Paper, SortOrder
+from app.models.entities import DecisionState, Paper, QueueDecision, SortOrder
 from app.models.ids import utcnow
 
 # Module-level `Depends(...)` singletons — matches Task 3B's own fix for
@@ -48,6 +50,18 @@ def pubmed_sort_for(sort: SortOrder) -> str:
     return "relevance"
 
 
+def get_papers_by_pmid(db: DBSession, pmids: list[str]) -> dict[str, Paper]:
+    """One `SELECT ... WHERE pmid IN (...)` for the whole batch instead of
+    a per-pmid `db.get(Paper, ...)` loop (TASK PERF-1) — against the remote
+    Turso database each `db.get` is a full network round-trip, and the
+    per-pmid loops here were the dominant cost of a live search request
+    (~20 sequential round-trips per loop at 200-300ms each)."""
+    if not pmids:
+        return {}
+    rows = db.exec(select(Paper).where(col(Paper.pmid).in_(pmids))).all()
+    return {paper.pmid: paper for paper in rows}
+
+
 async def upsert_papers_from_esummary(
     db: DBSession, records: list[ESummaryRecord]
 ) -> dict[str, Paper]:
@@ -55,11 +69,16 @@ async def upsert_papers_from_esummary(
     of ESummary records. Returns a `{pmid: Paper}` map for the caller's
     convenience. Does not touch `display_abstract`/`spoken_abstract`/
     `abstract_sections` — those are EFetch's job (§7.1's two-stage
-    strategy), populated later by `queue.py`'s abstract endpoint."""
+    strategy), populated later by `queue.py`'s abstract endpoint.
+
+    Reads all existing rows in one batched SELECT (see
+    `get_papers_by_pmid`) and flushes once — never per-record round-trips
+    (TASK PERF-1)."""
     now = utcnow()
     papers: dict[str, Paper] = {}
+    existing = get_papers_by_pmid(db, [record.pmid for record in records])
     for record in records:
-        paper = db.get(Paper, record.pmid)
+        paper = existing.get(record.pmid)
         if paper is None:
             paper = Paper(pmid=record.pmid, title=record.title)
         paper.title = record.title
@@ -83,18 +102,23 @@ async def apply_citation_counts(
     result), it never fails the whole search/queue request."""
     result = await icite_client.fetch_citation_counts(pmids)
     counts: dict[str, int | None] = {}
+    # One batched SELECT for the whole page instead of a per-pmid
+    # `db.get` loop in each branch (TASK PERF-1). The callers have just
+    # flushed these rows via `upsert_papers_from_esummary`, so the ORM
+    # identity map hands back the same instances.
+    papers = get_papers_by_pmid(db, pmids)
     if not result.available:
         # Leave whatever citation_count each Paper row already had
         # (possibly None, possibly a stale-but-real prior value) —
         # degrade the *sort*, not the data.
         for pmid in pmids:
-            paper = db.get(Paper, pmid)
+            paper = papers.get(pmid)
             counts[pmid] = paper.citation_count if paper else None
         return counts
 
     now = utcnow()
     for pmid in pmids:
-        paper = db.get(Paper, pmid)
+        paper = papers.get(pmid)
         count = result.counts.get(pmid)
         if paper is not None and count is not None:
             paper.citation_count = count
@@ -103,6 +127,31 @@ async def apply_citation_counts(
         counts[pmid] = paper.citation_count if paper else count
     db.flush()
     return counts
+
+
+def insert_pending_decisions(
+    db: DBSession, session_id: str, ordered_pmids: list[str], start_position: int = 0
+) -> None:
+    """Insert one `pending` `QueueDecision` row per pmid, positions
+    continuing from `start_position`, as a single executemany Core INSERT
+    rather than ~20 per-object `db.add` flushes (TASK PERF-1 — the ORM
+    add-loop was flushing row-by-row against remote Turso because
+    `QueueDecision.id` is server-generated). Callers still own the
+    surrounding transaction (`db.commit()`)."""
+    if not ordered_pmids:
+        return
+    db.execute(
+        insert(QueueDecision),
+        [
+            {
+                "session_id": session_id,
+                "pmid": pmid,
+                "position": start_position + offset,
+                "decision": DecisionState.pending,
+            }
+            for offset, pmid in enumerate(ordered_pmids)
+        ],
+    )
 
 
 def order_pmids_by_citations(pmids: list[str], counts: dict[str, int | None]) -> list[str]:
