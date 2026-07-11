@@ -13,7 +13,14 @@ export interface ErrorCopy {
   message: string;
 }
 
-const GENERIC_MESSAGE = "Something went wrong. Please try again.";
+/** The single generic fallback line (§4.3). Exported (Task PERF-3) so
+ * callers that must *construct* an `ApiErrorBody` for a non-server
+ * failure (e.g. App.tsx mapping a raw network `TypeError` from a failed
+ * `fetch` into the ErrorState path) reuse this exact copy instead of
+ * hardcoding a second, drift-prone duplicate of it. */
+export const GENERIC_ERROR_MESSAGE = "Something went wrong. Please try again.";
+
+const GENERIC_MESSAGE = GENERIC_ERROR_MESSAGE;
 
 /**
  * Resolves the (title, message) pair for a given context/error/offline

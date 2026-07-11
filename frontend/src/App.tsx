@@ -42,6 +42,7 @@ import {
   useSearchSettings,
   useUpdateDecision,
   useZoteroCollections,
+  type ApiErrorBody,
   type DecidedVia,
   type DecisionValue,
   type QueueItem,
@@ -64,7 +65,12 @@ import {
   StackScreen,
   type DecisionSource,
 } from "./components/screens";
-import { CookieConsentNotice, ErrorState, PendingRetryBanner } from "./components";
+import {
+  CookieConsentNotice,
+  ErrorState,
+  GENERIC_ERROR_MESSAGE,
+  PendingRetryBanner,
+} from "./components";
 import { confirmDisconnectDuringPush, ZoteroPushModal } from "./features/zotero";
 
 /** Only `ApiError` instances carry CONTRACTS.md §2's `{code, message}`
@@ -73,6 +79,24 @@ import { confirmDisconnectDuringPush, ZoteroPushModal } from "./features/zotero"
  * that case with its own copy (§4.5), so this just narrows/discards. */
 function apiErrorOrNull(error: unknown): ApiError | null {
   return error instanceof ApiError ? error : null;
+}
+
+/** Task PERF-3: the search panel only renders `ErrorState` when
+ * `error || isOffline` — so unlike the queue/abstract surfaces below
+ * (which render `ErrorState` unconditionally on `isError` and can
+ * tolerate `apiErrorOrNull`'s `null`), a raw network/parse rejection
+ * (e.g. `fetch` throwing `TypeError` while `navigator.onLine` is still
+ * `true` — DNS failure, dropped connection, CORS) narrowed to `null`
+ * rendered *nothing at all*: the search just silently looked like it
+ * never happened. Map that case to a generic CONTRACTS.md §2-shaped
+ * body reusing `errorCopy.ts`'s single generic line, so it flows
+ * through the exact same `ErrorState` path (with its Retry action)
+ * as a server-reported error. */
+function searchErrorBodyOrNull(error: unknown): ApiErrorBody | null {
+  if (error == null) return null;
+  const apiError = apiErrorOrNull(error);
+  if (apiError) return apiError;
+  return { code: "network_error", message: GENERIC_ERROR_MESSAGE };
 }
 
 function metadataSpokenLine(item: QueueItem): string {
@@ -322,7 +346,7 @@ function App() {
           onClose={openStack}
           onStart={handleStart}
           isLoading={runSearch.isPending}
-          error={apiErrorOrNull(runSearch.error)}
+          error={searchErrorBodyOrNull(runSearch.error)}
           isOffline={isOffline}
           onRetry={handleStart}
         />
