@@ -78,6 +78,42 @@ async def test_fetch_citation_counts_degrades_gracefully_on_5xx() -> None:
     assert result.counts == {}
 
 
+# ---------------------------------------------------------------------------
+# PERF-2: connection reuse + bounded timeout.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_fetch_citation_counts_reuses_one_pooled_http_client() -> None:
+    """PERF-2: same fix as `PubMedClient` — one long-lived pooled
+    `httpx.AsyncClient` per client instance, not a fresh handshake per
+    call, and `aclose` -> transparent re-creation on next use."""
+    fixture = _load_json("icite_response.json")
+    with respx.mock(assert_all_called=True) as mock:
+        mock.get(BASE_URL).mock(return_value=httpx.Response(200, json=fixture))
+        client = ICiteClient()
+        await client.fetch_citation_counts(["38279812"])
+        first_http = client._http
+        await client.fetch_citation_counts(["38279813"])
+        assert client._http is first_http
+        assert first_http is not None and not first_http.is_closed
+
+        await client.aclose()
+        assert first_http.is_closed
+        await client.fetch_citation_counts(["37000001"])
+
+    assert client._http is not first_http
+    assert client._http is not None and not client._http.is_closed
+
+
+def test_default_timeout_is_bounded_for_user_facing_search() -> None:
+    """PERF-2: iCite stays single-attempt (§7.6 graceful degradation), so
+    its default timeout is the whole worst-case latency it can add to a
+    search — must stay well inside the ~15s overall budget."""
+    client = ICiteClient()
+    assert client._timeout == pytest.approx(6.0)
+
+
 @pytest.mark.asyncio
 async def test_fetch_citation_counts_degrades_gracefully_on_malformed_json() -> None:
     with respx.mock(assert_all_called=True) as mock:

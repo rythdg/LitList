@@ -2170,3 +2170,69 @@ noting the semantic change explicitly. (b) Remaining fixed latency is
 network RTT Render<->Turso times ~9 statements plus the PubMed/iCite
 calls themselves — if still too slow live, next lever is co-locating
 DB and app or an embedded libSQL replica, out of this task's scope.
+[2026-07-11T00:00:00] TASK PERF-2 — START
+Fixing confirmed live-search latency/reliability issue (user-reported,
+status.log open decision item 1; human gave go-ahead). Two causes,
+already diagnosed: (1) `PubMedClient._get` and
+`ICiteClient.fetch_citation_counts` construct a fresh
+`httpx.AsyncClient` per request — new TCP+TLS handshake to NCBI on
+every call; (2) retry budget too generous for a user-facing request
+(10s per attempt x up to 4 attempts = ~40s before the §13.6
+`service_unavailable` degradation surfaces). Plan: lazily-created,
+long-lived per-instance AsyncClient with keep-alive (safe because
+`app/clients.py`'s `lru_cache` providers give one client instance per
+process — verified before choosing per-instance over module scope),
+closed on FastAPI lifespan shutdown; PubMed per-attempt timeout 10s ->
+6s, retries 3 -> 1 (2 attempts total), cap honored `Retry-After` so
+worst case stays under ~15s; iCite timeout 10s -> 6s, still single
+attempt. Preserving the no-raise_for_status secret-leak guard in
+`_get` and the injectable-Clock pacing tests (§7.7/§15.8) untouched.
+Files owned this task: backend/app/integrations/pubmed.py, icite.py,
+backend/app/main.py (lifespan shutdown hook only), backend/tests/
+test_pubmed_client.py, test_icite_client.py, this log.
+
+[2026-07-11T00:40:00] TASK PERF-2 — COMPLETE
+Did:
+1. Connection pooling: `PubMedClient` and `ICiteClient` now each hold
+   one lazily-created, long-lived `httpx.AsyncClient` (`_http_client()`
+   creates on first use / re-creates if closed; new `aclose()` closes
+   it). Combined with `app/clients.py`'s existing `lru_cache`
+   process-singleton providers (verified before choosing per-instance
+   over module scope), this means keep-alive connection reuse to
+   eutils.ncbi.nlm.nih.gov / icite.od.nih.gov instead of a fresh
+   TCP+TLS handshake per request. Wired both `aclose()` calls into
+   `app/main.py`'s lifespan shutdown; safe as no-ops if never used, and
+   the is_closed re-creation path keeps repeated `TestClient` contexts
+   working against the process singletons.
+2. Latency budget: PubMed per-attempt timeout 10s -> 6s
+   (_DEFAULT_TIMEOUT_SECONDS), retries 3 -> 1 (_MAX_RETRY_ATTEMPTS, so
+   2 attempts total), and honored `Retry-After` now capped at 3s
+   (_MAX_RETRY_AFTER_SECONDS, new — NCBI could legally send e.g. 300
+   and a user-facing search must not sleep that long). Worst case
+   before PubMedUnavailableError (-> §13.6 service_unavailable): a
+   given attempt either burns its full 6s timeout (network-error path
+   retries immediately, no sleep) OR gets a fast 429 + <=3s capped
+   backoff — never both — so worst case = 2 x (max(6, 3) + 0.33s
+   no-key pacing) ~= 12.7s, down from ~40s. iCite timeout 10s -> 6s,
+   still single-attempt per §7.6's graceful degradation.
+3. Preserved: the no-raise_for_status secret-leak guard in `_get`
+   (comment + behavior untouched; the 403-leak test still passes),
+   injectable-Clock pacing (§7.7/§15.8 fake-clock tests untouched and
+   green), and the inbound-vs-outbound rate-limit separation (§10.5 —
+   inbound middleware not touched).
+Worked: full suite 225 passed / 2 skipped (the 2 skips are the
+pre-existing Turso-credential-gated integration tests; 220+2 before
+this task in this worktree, +5 new PERF-2 tests: pooled-client reuse,
+aclose-then-recreate, Retry-After cap, worst-case-budget arithmetic
+computed from the client's real attributes, iCite reuse/timeout).
+`ruff check .` clean; `mypy app` clean (33 files). No existing test
+assertion was loosened — no existing test pinned the old 10s/3-retry
+defaults, so none needed updating.
+Changed: backend/app/integrations/pubmed.py,
+backend/app/integrations/icite.py, backend/app/main.py (lifespan
+shutdown hook only), backend/tests/test_pubmed_client.py,
+backend/tests/test_icite_client.py.
+Open: none for the code. Note for whoever verifies live: the pooling
+win only shows up on the 2nd+ outbound call per process — Render free
+tier cold starts still pay one handshake per host per boot, which is
+inherent, not a regression.
